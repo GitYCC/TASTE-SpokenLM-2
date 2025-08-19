@@ -1,6 +1,6 @@
 #!/bin/bash
 # Copyright 2024 Alibaba Inc. All Rights Reserved.
-. ./path.sh || exit 1;
+source training/path.sh || exit 1;
 
 stage=-1
 stop_stage=3
@@ -67,45 +67,43 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
   cat training/data/{train-clean-100,train-clean-360,train-other-500}/parquet/data.list > training/data/train.data.list
   cat training/data/{dev-clean,dev-other}/parquet/data.list > training/data/dev.data.list
   # NOTE will update llm/hift training later
-  for model in llm flow hifigan; do
-    torchrun --nnodes=1 --nproc_per_node=$num_gpus \
-        --rdzv_id=$job_id --rdzv_backend="c10d" --rdzv_endpoint="localhost:1234" \
-      cosyvoice/bin/train.py \
-      --train_engine $train_engine \
-      --config training/conf/cosyvoice2.yaml \
-      --train_data training/data/train.data.list \
-      --cv_data training/data/dev.data.list \
-      --qwen_pretrain_path $pretrained_model_dir/CosyVoice-BlankEN \
-      --model $model \
-      --checkpoint $pretrained_model_dir/$model.pt \
-      --model_dir `pwd`/exp/cosyvoice2/$model/$train_engine \
-      --tensorboard_dir `pwd`/tensorboard/cosyvoice2/$model/$train_engine \
-      --ddp.dist_backend $dist_backend \
-      --num_workers ${num_workers} \
-      --prefetch ${prefetch} \
-      --pin_memory \
-      --use_amp \
-      --deepspeed_config training/conf/ds_stage2.json \
-      --deepspeed.save_states model+optimizer
-  done
+
+  torchrun --nnodes=1 --nproc_per_node=$num_gpus \
+      --rdzv_id=$job_id --rdzv_backend="c10d" --rdzv_endpoint="localhost:1234" \
+    CosyVoice/cosyvoice/bin/train.py \
+    --train_engine $train_engine \
+    --config training/conf/cosyvoice2.yaml \
+    --train_data training/data/train.data.list \
+    --cv_data training/data/dev.data.list \
+    --qwen_pretrain_path $pretrained_model_dir/CosyVoice-BlankEN \
+    --model llm \
+    --checkpoint $pretrained_model_dir/llm.pt \
+    --model_dir training/exp/ \
+    --tensorboard_dir training/tensorboard/ \
+    --ddp.dist_backend $dist_backend \
+    --num_workers ${num_workers} \
+    --prefetch ${prefetch} \
+    --pin_memory \
+    --use_amp \
+    --deepspeed_config training/conf/ds_stage2.json \
+    --deepspeed.save_states model+optimizer
+
 fi
 
 # average model
 average_num=5
 if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
-  for model in llm flow hifigan; do
-    decode_checkpoint=`pwd`/exp/cosyvoice/$model/$train_engine/${model}.pt
-    echo "do model average and final checkpoint is $decode_checkpoint"
-    python cosyvoice/bin/average_model.py \
-      --dst_model $decode_checkpoint \
-      --src_path `pwd`/exp/cosyvoice/$model/$train_engine  \
-      --num ${average_num} \
-      --val_best
-  done
+  decode_checkpoint=training/exp/${model}.pt
+  echo "do model average and final checkpoint is $decode_checkpoint"
+  python CosyVoice/cosyvoice/bin/average_model.py \
+    --dst_model $decode_checkpoint \
+    --src_path training/exp/  \
+    --num ${average_num} \
+    --val_best
 fi
 
 if [ ${stage} -le 7 ] && [ ${stop_stage} -ge 7 ]; then
   echo "Export your model for inference speedup. Remember copy your llm or flow model to model_dir"
-  python cosyvoice/bin/export_jit.py --model_dir $pretrained_model_dir
-  python cosyvoice/bin/export_onnx.py --model_dir $pretrained_model_dir
+  python CosyVoice/cosyvoice/bin/export_jit.py --model_dir $pretrained_model_dir
+  python CosyVoice/cosyvoice/bin/export_onnx.py --model_dir $pretrained_model_dir
 fi
