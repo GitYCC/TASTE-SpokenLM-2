@@ -4,6 +4,6 @@
 # Usage: ./export_model.sh OUTPUT_DIR
 
 export PYTHONIOENCODING=UTF-8
-export PYTHONPATH=CosyVoice:CosyVoice/third_party/Matcha-TTS:$PYTHONPATH
+export PYTHONPATH=CosyVoice:CosyVoice/third_party/Matcha-TTS
 
-uv run scripts/export_cosyvoice_model.py
+python3 scripts/export_cosyvoice_model.py
