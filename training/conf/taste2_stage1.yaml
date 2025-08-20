@@ -162,6 +162,13 @@ filter: !name:cosyvoice.dataset.processor.filter
     token_min_length: 1
 resample: !name:cosyvoice.dataset.processor.resample
     resample_rate: !ref <sample_rate>
+audio_extractor: !new:taste_speech.modules_taste.cosyvoice.whisper_frontend.WhisperFrontend
+    whisper_model: large-v3
+    do_pad_trim: True
+    permute: True
+extract_audio: !name:cosyvoice.dataset.processor.extract_audio
+    audio_extractor: !ref <audio_extractor>
+    target_sample_rate: 16_000
 truncate: !name:cosyvoice.dataset.processor.truncate
     truncate_length: 24480 # must be a multiplier of hop_size
 feat_extractor: !name:matcha.utils.audio.mel_spectrogram
@@ -190,6 +197,7 @@ batch: !name:cosyvoice.dataset.processor.batch
     max_frames_in_batch: 2000
 padding: !name:cosyvoice.dataset.processor.padding
     use_spk_embedding: False # change to True during sft
+padding_taste2: !name:cosyvoice.dataset.processor.padding_taste2
 
 
 # dataset processor pipeline
@@ -197,13 +205,13 @@ data_pipeline: [
     !ref <parquet_opener>,
     !ref <tokenize>,
     !ref <filter>,
+    !ref <extract_audio>, # added for audio branch, NOTE: should be in front of resample and compute fbank!!
     !ref <resample>,
     !ref <compute_fbank>,
-    !ref <parse_embedding>,
     !ref <shuffle>,
     !ref <sort>,
     !ref <batch>,
-    !ref <padding>,
+    !ref <padding_taste2>,
 ]
 data_pipeline_gan: [
     !ref <parquet_opener>,
@@ -239,7 +247,7 @@ freeze_params:
     enabled: true  # set to false to disable parameter freezing
     patterns:
         # Freeze taste_tokenizer encoder part
-        - "taste_tokenizer\.audio_joint_encoder_segmenter\.audio_encoder\..+"
+        - "taste_tokenizer\\.audio_joint_encoder_segmenter\\.audio_encoder\\..+"
 
 # gan train conf
 train_conf_gan:

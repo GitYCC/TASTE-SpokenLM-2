@@ -136,6 +136,32 @@ def resample(data, resample_rate=22050, min_sample_rate=16000, mode='train'):
         yield sample
 
 
+# NOTE: This is the audio feature extraction process for our `audio branch`!
+def extract_audio(data, audio_extractor, mode='train', target_sample_rate=16_000, **kwargs):
+    """ Extract audio for audio branch
+        Args:
+            data: Iterable[{key, wav, label, sample_rate}]
+
+        Returns:
+            Iterable[{key, feat, label}]
+    """
+    audio_extractor.eval()
+    with torch.no_grad():
+        for sample in data:
+            assert 'sample_rate' in sample
+            assert 'speech' in sample
+            waveform, orig_sample_rate = sample['speech'], sample['sample_rate']
+            feat_len = None
+            if orig_sample_rate != target_sample_rate:
+                waveform = torchaudio.transforms.Resample(
+                    orig_freq=orig_sample_rate, new_freq=target_sample_rate)(waveform).mean(0)
+            waveform_length = [waveform.shape[-1]]
+            feat, feat_len = audio_extractor(waveform.view(1,-1), waveform_length, **kwargs)
+            sample['audio_feature'] = feat.squeeze(dim=0)
+            sample['audio_feature_len'] = feat_len
+            yield sample
+
+
 def truncate(data, truncate_length=24576, mode='train'):
     """ Truncate data.
 
@@ -431,4 +457,82 @@ def padding(data, use_spk_embedding, mode='train', gan=False, dpo=False):
             batch["embedding"] = batch["spk_embedding"]
         else:
             batch["embedding"] = batch["utt_embedding"]
+        yield batch
+
+def padding_taste2(data, mode='train', gan=False, dpo=False):
+    """ Padding the data into training data
+
+        Args:
+            data: Iterable[List[{key, feat, label}]]
+
+        Returns:
+            Iterable[Tuple(keys, feats, labels, feats lengths, label lengths)]
+    """
+    for sample in data:
+        assert isinstance(sample, list)
+        speech_feat_len = torch.tensor([x['speech_feat'].size(1) for x in sample],
+                                       dtype=torch.int32)
+        order = torch.argsort(speech_feat_len, descending=True)
+
+        utts = [sample[i]['utt'] for i in order]
+        speech = [sample[i]['speech'].squeeze(dim=0) for i in order]
+        speech_len = torch.tensor([i.size(0) for i in speech], dtype=torch.int32)
+        speech = pad_sequence(speech, batch_first=True, padding_value=0)
+        speech_token = [torch.tensor(sample[i]['speech_token']) for i in order]
+        speech_token_len = torch.tensor([i.size(0) for i in speech_token], dtype=torch.int32)
+        speech_token = pad_sequence(speech_token,
+                                    batch_first=True,
+                                    padding_value=0)
+        speech_feat = [sample[i]['speech_feat'] for i in order]
+        speech_feat_len = torch.tensor([i.size(0) for i in speech_feat], dtype=torch.int32)
+        speech_feat = pad_sequence(speech_feat,
+                                   batch_first=True,
+                                   padding_value=0)
+        text = [sample[i]['text'] for i in order]
+        text_token = [torch.tensor(sample[i]['text_token']) for i in order]
+        text_token_len = torch.tensor([i.size(0) for i in text_token], dtype=torch.int32)
+        text_token = pad_sequence(text_token, batch_first=True, padding_value=0)
+        audio_feature = pad_sequence(
+            [sample[i]['audio_feature'] for i in order],
+            batch_first=True,
+            padding_value=0
+        )
+        audio_feature_len = torch.tensor([sample[i]['audio_feature_len'] for i in order], dtype=torch.int32)
+
+        batch = {
+            "utts": utts,
+            "speech": speech,
+            "speech_len": speech_len,
+            "speech_token": speech_token,
+            "speech_token_len": speech_token_len,
+            "speech_feat": speech_feat,
+            "speech_feat_len": speech_feat_len,
+            "text": text,
+            "text_token": text_token,
+            "text_token_len": text_token_len,
+            'audio_feature': audio_feature,
+            'audio_feature_len': audio_feature_len,
+        }
+        if gan is True:
+            # in gan train, we need pitch_feat
+            pitch_feat = [sample[i]['pitch_feat'] for i in order]
+            pitch_feat_len = torch.tensor([i.size(0) for i in pitch_feat], dtype=torch.int32)
+            pitch_feat = pad_sequence(pitch_feat,
+                                      batch_first=True,
+                                      padding_value=0)
+            batch["pitch_feat"] = pitch_feat
+            batch["pitch_feat_len"] = pitch_feat_len
+        else:
+            # only gan train needs speech, delete it to save memory
+            del batch["speech"]
+            del batch["speech_len"]
+        if dpo is True:
+            reject_speech_token = [torch.tensor(sample[i]['reject_speech_token']) for i in order]
+            reject_speech_token_len = torch.tensor([i.size(0) for i in reject_speech_token], dtype=torch.int32)
+            reject_speech_token = pad_sequence(reject_speech_token,
+                                               batch_first=True,
+                                               padding_value=0)
+            batch['reject_speech_token'] = reject_speech_token
+            batch['reject_speech_token_len'] = reject_speech_token_len
+
         yield batch
