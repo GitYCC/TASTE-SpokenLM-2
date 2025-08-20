@@ -234,6 +234,13 @@ train_conf:
     log_interval: 100
     save_per_step: -1
 
+# parameter freezing configuration
+freeze_params:
+    enabled: true  # set to false to disable parameter freezing
+    patterns:
+        # Freeze taste_tokenizer encoder part
+        - "taste_tokenizer\.audio_joint_encoder_segmenter\.audio_encoder\..+"
+
 # gan train conf
 train_conf_gan:
     optim: adam

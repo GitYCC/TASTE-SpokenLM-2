@@ -145,7 +145,7 @@ def main():
     parser = argparse.ArgumentParser(description='Export TASTE model')
     parser.add_argument('--config', default='training/conf/taste2_stage1.yaml',
                        help='Path to TASTE configuration file')
-    parser.add_argument('--output', '-o', default='training/pretrained_models/Taste2Stage1Init/',
+    parser.add_argument('--output', '-o', default='training/pretrained_models/Taste2-Stage1-Init/',
                        help='Output directory')
     parser.add_argument('--source', default='training/pretrained_models/CosyVoice2-0.5B/',
                        help='source directory')

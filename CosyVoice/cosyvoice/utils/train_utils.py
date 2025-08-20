@@ -365,3 +365,80 @@ def log_per_save(writer, info_dict):
             writer.add_scalar('{}/{}'.format(tag, k), info_dict[k], step + 1)
         for k, v in loss_dict.items():
             writer.add_scalar('{}/{}'.format(tag, k), v, step + 1)
+
+
+def apply_parameter_freezing(model, freeze_config):
+    """Apply parameter freezing based on regex patterns
+    
+    Args:
+        model: PyTorch model to apply freezing to
+        freeze_config: Dictionary containing freeze configuration with keys:
+            - enabled: bool, whether to enable parameter freezing
+            - patterns: list of regex patterns to match parameter names
+    
+    Returns:
+        dict: Statistics about frozen parameters
+    """
+    if not freeze_config or not freeze_config.get('enabled', False):
+        logging.info("Parameter freezing is disabled")
+        return {'frozen_count': 0, 'total_count': 0, 'frozen_ratio': 0.0}
+    
+    patterns = freeze_config.get('patterns', [])
+    if not patterns:
+        logging.warning("No freeze patterns provided, skipping parameter freezing")
+        return {'frozen_count': 0, 'total_count': 0, 'frozen_ratio': 0.0}
+    
+    # Compile regex patterns for efficiency
+    compiled_patterns = []
+    for pattern in patterns:
+        try:
+            compiled_patterns.append(re.compile(pattern))
+            logging.info(f"Compiled freeze pattern: {pattern}")
+        except re.error as e:
+            logging.error(f"Invalid regex pattern '{pattern}': {e}")
+            continue
+    
+    if not compiled_patterns:
+        logging.warning("No valid regex patterns found, skipping parameter freezing")
+        return {'frozen_count': 0, 'total_count': 0, 'frozen_ratio': 0.0}
+    
+    frozen_count = 0
+    total_params = 0
+    frozen_param_names = []
+    
+    # Apply freezing to parameters
+    for name, param in model.named_parameters():
+        total_params += 1
+        
+        # Check if parameter name matches any pattern
+        for pattern in compiled_patterns:
+            if pattern.search(name):
+                if param.requires_grad:
+                    param.requires_grad = False
+                    frozen_count += 1
+                    frozen_param_names.append(name)
+                    logging.debug(f"Frozen parameter: {name}")
+                break
+    
+    frozen_ratio = frozen_count / total_params if total_params > 0 else 0.0
+    
+    # Log summary
+    rank = int(os.environ.get('RANK', 0))
+    if rank == 0:  # Only log from rank 0 to avoid duplicate logs
+        logging.info(f"Parameter freezing summary:")
+        logging.info(f"  Total parameters: {total_params}")
+        logging.info(f"  Frozen parameters: {frozen_count}")
+        logging.info(f"  Frozen ratio: {frozen_ratio:.2%}")
+        logging.info(f"  Freeze patterns used: {patterns}")
+        
+        if frozen_param_names:
+            logging.info(f"  First 10 frozen parameters: {frozen_param_names[:10]}")
+            if len(frozen_param_names) > 10:
+                logging.info(f"  ... and {len(frozen_param_names) - 10} more")
+    
+    return {
+        'frozen_count': frozen_count,
+        'total_count': total_params,
+        'frozen_ratio': frozen_ratio,
+        'frozen_param_names': frozen_param_names
+    }

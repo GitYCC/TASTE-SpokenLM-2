@@ -34,7 +34,8 @@ from cosyvoice.utils.train_utils import (
     init_dataset_and_dataloader,
     init_optimizer_and_scheduler,
     init_summarywriter, save_model,
-    wrap_cuda_model, check_modify_and_save_config)
+    wrap_cuda_model, check_modify_and_save_config,
+    apply_parameter_freezing)
 
 
 def get_args():
@@ -146,6 +147,10 @@ def main():
     # Dispatch model from cpu to gpu
     model = wrap_cuda_model(args, model)
 
+    # Apply parameter freezing before optimizer initialization
+    freeze_config = configs.get('freeze_params', {})
+    freeze_stats = apply_parameter_freezing(model, freeze_config)
+    
     # Get optimizer & scheduler
     model, optimizer, scheduler, optimizer_d, scheduler_d = init_optimizer_and_scheduler(args, configs, model, gan)
     scheduler.set_step(start_step)
