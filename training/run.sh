@@ -2,12 +2,12 @@
 # Copyright 2024 Alibaba Inc. All Rights Reserved.
 source training/path.sh || exit 1;
 
-stage=-1
-stop_stage=3
+stage=5
+stop_stage=5
 
 data_url=www.openslr.org/resources/60
 data_dir=./training/data/raw/
-pretrained_model_dir=./training/pretrained_models/CosyVoice2-0.5B
+pretrained_model_dir=./training/pretrained_models/Taste2-Stage1-Init/
 
 if [ ${stage} -le -1 ] && [ ${stop_stage} -ge -1 ]; then
   echo "Data Download"
@@ -64,15 +64,15 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
   if [ $train_engine == 'deepspeed' ]; then
     echo "Notice deepspeed has its own optimizer config. Modify conf/ds_stage2.json if necessary"
   fi
-  cat training/data/{train-clean-100,train-clean-360,train-other-500}/parquet/data.list > training/data/train.data.list
-  cat training/data/{dev-clean,dev-other}/parquet/data.list > training/data/dev.data.list
+  # cat training/data/{train-clean-100,train-clean-360,train-other-500}/parquet/data.list > training/data/train.data.list
+  # cat training/data/{dev-clean,dev-other}/parquet/data.list > training/data/dev.data.list
   # NOTE will update llm/hift training later
 
   torchrun --nnodes=1 --nproc_per_node=$num_gpus \
       --rdzv_id=$job_id --rdzv_backend="c10d" --rdzv_endpoint="localhost:1234" \
     CosyVoice/cosyvoice/bin/train.py \
     --train_engine $train_engine \
-    --config training/conf/cosyvoice2.yaml \
+    --config training/conf/taste2_stage1.yaml \
     --train_data training/data/train.data.list \
     --cv_data training/data/dev.data.list \
     --qwen_pretrain_path $pretrained_model_dir/CosyVoice-BlankEN \
@@ -84,7 +84,6 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     --num_workers ${num_workers} \
     --prefetch ${prefetch} \
     --pin_memory \
-    --use_amp \
     --deepspeed_config training/conf/ds_stage2.json \
     --deepspeed.save_states model+optimizer
 
