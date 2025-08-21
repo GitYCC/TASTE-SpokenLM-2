@@ -13,6 +13,11 @@ qwen_pretrain_path: 'training/pretrained_models/CosyVoice2-0.5B/CosyVoice-BlankE
 token_frame_rate: 25
 token_mel_ratio: 2
 attn_implementation: 'flash_attention_2'
+max_frames_in_batch: 6000 # original: 2000
+accum_grad: 1 # original: 2
+lr: 5e-4
+save_per_step: 10000  # production: 10000
+wandb_run_name: "250821-1800-stage1-novq"
 
 # stream related params
 chunk_size: 25 # streaming inference chunk size, in token
@@ -195,7 +200,7 @@ sort: !name:cosyvoice.dataset.processor.sort
     sort_size: 500  # sort_size should be less than shuffle_size
 batch: !name:cosyvoice.dataset.processor.batch
     batch_type: 'dynamic'
-    max_frames_in_batch: 2000
+    max_frames_in_batch: !ref <max_frames_in_batch> 
 padding: !name:cosyvoice.dataset.processor.padding
     use_spk_embedding: False # change to True during sft
 padding_taste2: !name:cosyvoice.dataset.processor.padding_taste2
@@ -233,22 +238,22 @@ data_pipeline_gan: [
 train_conf:
     optim: adam
     optim_conf:
-        lr: 1e-5 # change to 1e-5 during sft
+        lr: !ref <lr>  # change to 1e-5 during sft
     scheduler: constantlr # change to constantlr during sft
     scheduler_conf:
         warmup_steps: 2500
     max_epoch: 200
     grad_clip: 5
-    accum_grad: 2
+    accum_grad: !ref <accum_grad> 
     log_interval: 100
-    save_per_step: 1000
+    save_per_step: !ref <save_per_step> 
     
     # wandb logging configuration
-    use_wandb: false  # set to true to enable wandb logging
-    wandb_project: "cosyvoice-taste2"
-    wandb_entity: null  # set to your wandb entity/team name
-    wandb_run_name: null  # set to custom run name or leave null for auto-generation
-    wandb_tags: "stage1,llm"  # comma-separated tags for organizing experiments
+    use_wandb: true  # set to true to enable wandb logging
+    wandb_project: "stage1-training"
+    wandb_entity: "TASTE"  # set to your wandb entity/team name
+    wandb_run_name: !ref <wandb_run_name>  # set to custom run name or leave null for auto-generation
+    wandb_tags: "stage1"  # comma-separated tags for organizing experiments
 
 # parameter freezing configuration
 freeze_params:
