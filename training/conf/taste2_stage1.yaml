@@ -12,6 +12,7 @@ spk_embed_dim: 192
 qwen_pretrain_path: 'training/pretrained_models/CosyVoice2-0.5B/CosyVoice-BlankEN'
 token_frame_rate: 25
 token_mel_ratio: 2
+attn_implementation: 'flash_attention_2'
 
 # stream related params
 chunk_size: 25 # streaming inference chunk size, in token
@@ -31,7 +32,7 @@ llm: !new:cosyvoice.llm.llm.TasteS3GenerationLM
         pretrain_path: !ref <qwen_pretrain_path>
     taste_tokenizer: !new:taste_speech.taste2.taste_tokenizer.TasteTokenizer
         backbond_name_or_path: 'training/pretrained_models/distil-large-v3'
-        attn_implementation: 'eager'
+        attn_implementation: !ref <attn_implementation>
         whisper_decoder_embed_dim: 1280
         encoder_input_size: !ref <llm_input_size>
         quantization_on: False
