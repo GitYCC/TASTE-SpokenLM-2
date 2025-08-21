@@ -640,6 +640,8 @@ class TasteS3GenerationLM(Qwen2LM):
         )
         self.taste_tokenizer = taste_tokenizer
         self.taste_decoder_mixer = taste_decoder_mixer
+        self.weight_commit_loss = 1.0
+        self.is_text_only = (taste_tokenizer is None) or (taste_decoder_mixer is None)
 
     def forward(
             self,
@@ -666,12 +668,15 @@ class TasteS3GenerationLM(Qwen2LM):
         # 1-1. encode text_token
         text_token_emb = self.llm.model.model.embed_tokens(text_token)
 
-        # 1-2. encode taste_token
-        tokenized = self.taste_tokenizer(text_token, text_token_len, audio_feature, audio_feature_len)
-        taste_token_emb = tokenized['taste_token_emb']
+        if not self.is_text_only:
+            # 1-2. encode taste_token
+            tokenized = self.taste_tokenizer(text_token, text_token_len, audio_feature, audio_feature_len)
+            taste_token_emb = tokenized['taste_token_emb']
 
-        # 1-3. mixing
-        mixed_token_emb = self.taste_decoder_mixer(text_token_emb, taste_token_emb, text_token_len)
+            # 1-3. mixing
+            mixed_token_emb = self.taste_decoder_mixer(text_token_emb, taste_token_emb, text_token_len)
+        else:
+            mixed_token_emb = text_token_emb
 
         # 2. encode speech_token
         speech_token_emb = self.speech_embedding(speech_token)
@@ -685,6 +690,10 @@ class TasteS3GenerationLM(Qwen2LM):
         logits = self.llm_decoder(lm_output)
         loss = self.criterion_ce(logits, lm_target.to(device))
         acc = th_accuracy(logits.view(-1, self.speech_token_size + 3), lm_target, ignore_label=IGNORE_ID)
+
+        if not self.is_text_only and 'commit_loss' in tokenized:
+            loss += self.weight_commit_loss * tokenized['commit_loss']
+
         return {'loss': loss, 'acc': acc}
 
     @torch.inference_mode()
