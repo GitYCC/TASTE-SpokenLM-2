@@ -254,7 +254,7 @@ def parse_embedding(data, normalize, mode='train'):
         yield sample
 
 
-def tokenize(data, get_tokenizer, allowed_special, mode='train'):
+def tokenize(data, get_tokenizer, allowed_special, random_lstrip=True, mode='train'):
     """ Decode text to chars or BPE
         Inplace operation
 
@@ -267,7 +267,10 @@ def tokenize(data, get_tokenizer, allowed_special, mode='train'):
     tokenizer = get_tokenizer()
     for sample in data:
         assert 'text' in sample
-        sample['text_token'] = tokenizer.encode(sample['text'], allowed_special=allowed_special)
+        text = sample['text']
+        if random_lstrip and random.random() < 0.5:
+            text = text.lstrip()
+        sample['text_token'] = tokenizer.encode(text, allowed_special=allowed_special)
         yield sample
 
 
