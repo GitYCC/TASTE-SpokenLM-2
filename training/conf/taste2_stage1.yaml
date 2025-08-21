@@ -240,7 +240,14 @@ train_conf:
     grad_clip: 5
     accum_grad: 2
     log_interval: 100
-    save_per_step: -1
+    save_per_step: 1000
+    
+    # wandb logging configuration
+    use_wandb: false  # set to true to enable wandb logging
+    wandb_project: "cosyvoice-taste2"
+    wandb_entity: null  # set to your wandb entity/team name
+    wandb_run_name: null  # set to custom run name or leave null for auto-generation
+    wandb_tags: "stage1,llm"  # comma-separated tags for organizing experiments
 
 # parameter freezing configuration
 freeze_params:

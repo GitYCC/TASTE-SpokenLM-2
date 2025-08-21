@@ -30,10 +30,67 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 from torch.nn.utils import clip_grad_norm_
 
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+
 from deepspeed.runtime.zero.stage_1_and_2 import estimate_zero2_model_states_mem_needs_all_live
 
 from cosyvoice.dataset.dataset import Dataset
 from cosyvoice.utils.scheduler import WarmupLR, NoamHoldAnnealing, ConstantLR
+
+
+class UnifiedLogger:
+    """Unified logger that supports both TensorBoard and wandb
+    
+    TensorBoard is always enabled, wandb is optional additional logging.
+    """
+    
+    def __init__(self, tensorboard_dir, use_wandb=False, wandb_config=None, training_config=None):
+        # Always initialize TensorBoard
+        self.tensorboard_writer = SummaryWriter(tensorboard_dir)
+        
+        # Initialize wandb only if requested and available
+        self.use_wandb = use_wandb and WANDB_AVAILABLE
+        
+        if self.use_wandb:
+            if wandb_config is None:
+                wandb_config = {}
+            
+            # Check if wandb is already initialized
+            if not wandb.run:
+                wandb.init(**wandb_config)
+                
+                # Log training configuration to wandb if provided
+                if training_config is not None and wandb.run:
+                    wandb.config.update(training_config)
+            
+    def add_scalar(self, tag, value, step):
+        """Log scalar values to TensorBoard (always) and wandb (if enabled)"""
+        # Always log to TensorBoard
+        self.tensorboard_writer.add_scalar(tag, value, step)
+        
+        # Optionally log to wandb
+        if self.use_wandb and wandb.run:
+            # Convert TensorBoard tag format to wandb format
+            wandb_key = tag.replace('/', '_')
+            wandb.log({wandb_key: value}, step=step)
+    
+    def add_scalars(self, tag_dict, step):
+        """Log multiple scalar values"""
+        for tag, value in tag_dict.items():
+            self.add_scalar(tag, value, step)
+    
+    def finish(self):
+        """Clean up loggers"""
+        # Always close TensorBoard
+        self.tensorboard_writer.close()
+        
+        # Optionally close wandb
+        if self.use_wandb and wandb.run:
+            wandb.finish()
 
 
 def init_distributed(args):
@@ -184,11 +241,63 @@ def init_optimizer_and_scheduler(args, configs, model, gan):
     return model, optimizer, scheduler, optimizer_d, scheduler_d
 
 
-def init_summarywriter(args):
+def init_summarywriter(args, configs=None):
+    """Initialize unified logger with TensorBoard and wandb support
+    
+    TensorBoard is always enabled, wandb configuration comes from config file.
+    """
     writer = None
     if int(os.environ.get('RANK', 0)) == 0:
         os.makedirs(args.model_dir, exist_ok=True)
-        writer = SummaryWriter(args.tensorboard_dir)
+        
+        # Get wandb settings from config file
+        use_wandb = False
+        wandb_config = None
+        training_config = None
+        
+        if configs and 'train_conf' in configs:
+            train_conf = configs['train_conf']
+            use_wandb = train_conf.get('use_wandb', False)
+            
+            if use_wandb:
+                # Get wandb configuration from config file
+                wandb_project = train_conf.get('wandb_project', 'cosyvoice')
+                wandb_entity = train_conf.get('wandb_entity', None)
+                wandb_run_name = train_conf.get('wandb_run_name', None)
+                wandb_tags = train_conf.get('wandb_tags', '')
+                
+                wandb_config = {
+                    'project': wandb_project,
+                    'entity': wandb_entity,
+                    'name': wandb_run_name,
+                    'tags': wandb_tags.split(',') if wandb_tags else None,
+                    'save_code': True,
+                    'dir': args.model_dir
+                }
+                # Remove None values
+                wandb_config = {k: v for k, v in wandb_config.items() if v is not None}
+                
+                # Prepare training configuration for wandb
+                training_config = {
+                    'model_type': args.model,
+                    'train_engine': args.train_engine,
+                    'use_amp': args.use_amp,
+                    'dpo': args.dpo,
+                    'num_workers': args.num_workers,
+                    'prefetch': args.prefetch,
+                    'pin_memory': args.pin_memory,
+                }
+                # Add training config
+                training_config.update(train_conf)
+        
+        # Initialize unified logger (TensorBoard always enabled, wandb optional)
+        writer = UnifiedLogger(
+            tensorboard_dir=args.tensorboard_dir,  # Always provided
+            use_wandb=use_wandb,
+            wandb_config=wandb_config,
+            training_config=training_config
+        )
+    
     return writer
 
 

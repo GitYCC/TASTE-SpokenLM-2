@@ -126,7 +126,7 @@ def main():
     configs = check_modify_and_save_config(args, configs)
 
     # Tensorboard summary
-    writer = init_summarywriter(args)
+    writer = init_summarywriter(args, configs)
 
     # load checkpoint
     if args.dpo is True:
@@ -194,6 +194,10 @@ def main():
         else:
             executor.train_one_epoc(model, optimizer, scheduler, train_data_loader, cv_data_loader, writer, info_dict, scaler, group_join, ref_model=ref_model)
         dist.destroy_process_group(group_join)
+    
+    # Clean up loggers
+    if writer is not None and hasattr(writer, 'finish'):
+        writer.finish()
 
 
 if __name__ == '__main__':
