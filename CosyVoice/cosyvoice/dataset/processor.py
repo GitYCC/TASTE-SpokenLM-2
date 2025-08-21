@@ -246,11 +246,14 @@ def parse_embedding(data, normalize, mode='train'):
             Iterable[{key, feat, label}]
     """
     for sample in data:
-        sample['utt_embedding'] = torch.tensor(sample['utt_embedding'], dtype=torch.float32)
-        sample['spk_embedding'] = torch.tensor(sample['spk_embedding'], dtype=torch.float32)
-        if normalize:
-            sample['utt_embedding'] = F.normalize(sample['utt_embedding'], dim=0)
-            sample['spk_embedding'] = F.normalize(sample['spk_embedding'], dim=0)
+        if 'utt_embedding' in sample:
+            sample['utt_embedding'] = torch.tensor(sample['utt_embedding'], dtype=torch.float32)
+            if normalize:
+                sample['utt_embedding'] = F.normalize(sample['utt_embedding'], dim=0)
+        if 'spk_embedding' in sample:
+            sample['spk_embedding'] = torch.tensor(sample['spk_embedding'], dtype=torch.float32)
+            if normalize:
+                sample['spk_embedding'] = F.normalize(sample['spk_embedding'], dim=0)
         yield sample
 
 
@@ -419,8 +422,6 @@ def padding(data, use_spk_embedding, mode='train', gan=False, dpo=False):
         text_token = [torch.tensor(sample[i]['text_token']) for i in order]
         text_token_len = torch.tensor([i.size(0) for i in text_token], dtype=torch.int32)
         text_token = pad_sequence(text_token, batch_first=True, padding_value=0)
-        utt_embedding = torch.stack([sample[i]['utt_embedding'] for i in order], dim=0)
-        spk_embedding = torch.stack([sample[i]['spk_embedding'] for i in order], dim=0)
         batch = {
             "utts": utts,
             "speech": speech,
@@ -432,9 +433,15 @@ def padding(data, use_spk_embedding, mode='train', gan=False, dpo=False):
             "text": text,
             "text_token": text_token,
             "text_token_len": text_token_len,
-            "utt_embedding": utt_embedding,
-            "spk_embedding": spk_embedding,
         }
+        
+        # Only add embeddings if they exist in the samples
+        if 'utt_embedding' in sample[order[0]]:
+            utt_embedding = torch.stack([sample[i]['utt_embedding'] for i in order], dim=0)
+            batch["utt_embedding"] = utt_embedding
+        if 'spk_embedding' in sample[order[0]]:
+            spk_embedding = torch.stack([sample[i]['spk_embedding'] for i in order], dim=0)
+            batch["spk_embedding"] = spk_embedding
         if gan is True:
             # in gan train, we need pitch_feat
             pitch_feat = [sample[i]['pitch_feat'] for i in order]
@@ -456,9 +463,9 @@ def padding(data, use_spk_embedding, mode='train', gan=False, dpo=False):
                                                padding_value=0)
             batch['reject_speech_token'] = reject_speech_token
             batch['reject_speech_token_len'] = reject_speech_token_len
-        if use_spk_embedding is True:
+        if use_spk_embedding is True and "spk_embedding" in batch:
             batch["embedding"] = batch["spk_embedding"]
-        else:
+        elif not use_spk_embedding and "utt_embedding" in batch:
             batch["embedding"] = batch["utt_embedding"]
         yield batch
 
