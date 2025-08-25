@@ -179,3 +179,4 @@ exp/
 pretrained_models/
 tensorboard/
 validation_results/
+checkpoints/

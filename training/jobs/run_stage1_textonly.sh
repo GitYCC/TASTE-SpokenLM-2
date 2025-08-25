@@ -20,7 +20,7 @@ fi
 
 torchrun --nnodes=1 --nproc_per_node=$num_gpus \
     --rdzv_id=$job_id --rdzv_backend="c10d" --rdzv_endpoint="localhost:1234" \
-  CosyVoice/cosyvoice/bin/train.py \
+  training/train.py \
   --train_engine $train_engine \
   --config training/conf/$yaml_name.yaml \
   --train_data /mnt/shared/NTU_TASLM/yc/prepared_dataset/train.data.list \
