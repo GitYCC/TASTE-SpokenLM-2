@@ -12,6 +12,7 @@ dist_backend="nccl"
 num_workers=2
 prefetch=100
 train_engine=torch_ddp
+pretrained_model_dir=training/pretrained_models/Taste2-Stage1-Init/
 
 echo "Run train. We only support llm traning for now"
 if [ $train_engine == 'deepspeed' ]; then

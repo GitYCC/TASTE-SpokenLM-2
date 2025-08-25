@@ -17,7 +17,7 @@ max_frames_in_batch: 6000 # original: 2000
 accum_grad: 1 # original: 2
 lr: 5e-4
 save_per_step: 10000  # production: 10000
-wandb_run_name: "250821-1930-stage1-vq-fixed"
+wandb_run_name: "250824-1600-stage1-vq-f"
 
 # stream related params
 chunk_size: 25 # streaming inference chunk size, in token
