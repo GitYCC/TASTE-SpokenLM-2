@@ -102,9 +102,13 @@ def main():
     # gan train has some special initialization logic
     gan = True if args.model == 'hifigan' else False
 
-    override_dict = {k: None for k in ['llm', 'flow', 'hift', 'hifigan'] if k != args.model}
+    override_dict = {k: None for k in ['llm', 'slm', 'flow', 'hift', 'hifigan'] if k != args.model}
     if gan is True:
         override_dict.pop('hift')
+    
+    # Special handling for SLM model - don't override llm since slm references llm.taste_tokenizer
+    if args.model == 'slm':
+        override_dict.pop('llm', None)
     try:
         with open(args.config, 'r') as f:
             configs = load_hyperpyyaml(f, overrides={**override_dict, 'qwen_pretrain_path': args.qwen_pretrain_path})

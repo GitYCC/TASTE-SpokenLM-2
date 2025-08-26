@@ -18,7 +18,7 @@ max_frames_in_batch: 6000 # original: 2000
 accum_grad: 1 # original: 2
 lr: 5e-4
 save_per_step: 10000  # production: 10000
-wandb_run_name: "250824-1600-stage1-vq-f"
+wandb_run_name: "250826-stage2-slm"
 
 # stream related params
 chunk_size: 25 # streaming inference chunk size, in token
@@ -73,7 +73,6 @@ slm: !new:taste_speech.taste2.taste_slm.TasteSLM
         llm_output_size: !ref <llm_output_size>
         text_vocab_size: 151936  # Qwen2 vocab size
         d: !ref <codebook_dim>
-        taste_tokenizer: !ref <llm.taste_tokenizer>
         fc_mu_requires_bias: true
         b_logvar_is_linear: false
         conduct_reparameterization: true
@@ -273,17 +272,16 @@ train_conf:
     
     # wandb logging configuration
     use_wandb: true  # set to true to enable wandb logging
-    wandb_project: "stage1-training"
+    wandb_project: "stage2-training"
     wandb_entity: "TASTE"  # set to your wandb entity/team name
     wandb_run_name: !ref <wandb_run_name>  # set to custom run name or leave null for auto-generation
-    wandb_tags: "stage1"  # comma-separated tags for organizing experiments
+    wandb_tags: "stage2"  # comma-separated tags for organizing experiments
 
 # parameter freezing configuration
 freeze_params:
     enabled: true  # set to false to disable parameter freezing
     patterns:
-        # Freeze taste_tokenizer encoder part
-        - "taste_tokenizer\\.audio_joint_encoder_segmenter\\.audio_encoder\\..+"
+        - "taste_tokenizer\\..+"
 
 # gan train conf
 train_conf_gan:
