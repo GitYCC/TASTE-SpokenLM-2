@@ -9,16 +9,18 @@ ASR_MODEL_DIR="openai/whisper-large-v3"
 
 # Define model directories
 MODEL_DIRS=(
-    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM-2/training/checkpoints/taste2-stage1-scratch-460k"
-    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM-2/training/checkpoints/taste2-textonly-scratch-400k"
-    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM-2/training/checkpoints/taste2-stage1-pretrain-310k"
+    # "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM-2/training/checkpoints/taste2-stage1-scratch-460k"
+    # "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM-2/training/checkpoints/taste2-textonly-scratch-400k"
+    # "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM-2/training/checkpoints/taste2-stage1-pretrain-310k"
+    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM-2/training/checkpoints/taste2-stage1-pretrain-novq-410k"
 )
 
 # Define corresponding output directories
 OUTPUT_DIRS=(
-    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM-2/reconstruction_test/taste2-stage1-scratch-460k"
-    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM-2/reconstruction_test/taste2-textonly-scratch-400k"
-    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM-2/reconstruction_test/taste2-stage1-pretrain-310k"
+    # "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM-2/reconstruction_stage1/taste2-stage1-scratch-460k"
+    # "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM-2/reconstruction_stage1/taste2-textonly-scratch-400k"
+    # "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM-2/reconstruction_stage1/taste2-stage1-pretrain-310k"
+    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM-2/reconstruction_stage1/taste2-stage1-pretrain-novq-410k"
 )
 
 # Define test files

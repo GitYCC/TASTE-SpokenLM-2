@@ -125,21 +125,7 @@ class TASTE2Stage1:
             logging.warning('no cuda device, set load_jit/load_trt/fp16 to False')
         self.model = TASTE2Stage1Model(configs['llm'], configs['flow'], configs['hift'], fp16)
         
-        # Load and filter LLM checkpoint to remove training metadata
-        llm_checkpoint = torch.load('{}/llm.pt'.format(model_dir), map_location='cpu')
-        if isinstance(llm_checkpoint, dict) and 'model_state_dict' in llm_checkpoint:
-            llm_state_dict = llm_checkpoint['model_state_dict']
-        elif isinstance(llm_checkpoint, dict):
-            # Filter out training metadata keys
-            llm_state_dict = {k: v for k, v in llm_checkpoint.items() 
-                             if k not in ['epoch', 'step', 'optimizer_state_dict', 'scheduler_state_dict']}
-        else:
-            llm_state_dict = llm_checkpoint
-        
-        # Save filtered checkpoint temporarily
-        torch.save(llm_state_dict, '{}/llm_filtered.pt'.format(model_dir))
-        
-        self.model.load('{}/llm_filtered.pt'.format(model_dir),
+        self.model.load('{}/llm.pt'.format(model_dir),
                         '{}/flow.pt'.format(model_dir),
                         '{}/hift.pt'.format(model_dir))
         if load_vllm:

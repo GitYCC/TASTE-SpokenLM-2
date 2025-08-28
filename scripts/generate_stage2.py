@@ -95,7 +95,7 @@ class TASTE2Stage2Model(CosyVoice2Model):
         self.slm = slm
         
     def load_slm(self, slm_model):
-        state_dict = self.slm.state_dict(torch.load(slm_model, map_location=self.device))
+        state_dict = torch.load(slm_model, map_location=self.device)
         self.slm.load_state_dict(state_dict, strict=True)
         self.slm.to(self.device).eval()
 
@@ -126,39 +126,13 @@ class TASTE2Stage2:
         # Initialize model with SLM
         self.model = TASTE2Stage2Model(configs['llm'], configs['flow'], configs['hift'], configs['slm'], fp16)
         
-        # Load and filter LLM checkpoint to remove training metadata
-        llm_checkpoint = torch.load('{}/llm.pt'.format(model_dir), map_location='cpu')
-        if isinstance(llm_checkpoint, dict) and 'model_state_dict' in llm_checkpoint:
-            llm_state_dict = llm_checkpoint['model_state_dict']
-        elif isinstance(llm_checkpoint, dict):
-            # Filter out training metadata keys
-            llm_state_dict = {k: v for k, v in llm_checkpoint.items() 
-                             if k not in ['epoch', 'step', 'optimizer_state_dict', 'scheduler_state_dict']}
-        else:
-            llm_state_dict = llm_checkpoint
-        
-        # Save filtered checkpoint temporarily
-        torch.save(llm_state_dict, '{}/llm_filtered.pt'.format(model_dir))
-        self.model.load('{}/llm_filtered.pt'.format(model_dir),
+        llm_path = '{}/llm.pt'.format(model_dir)
+        # llm_path = configs['slm']['path_reload_taste_stage1']
+        self.model.load(llm_path,
                         '{}/flow.pt'.format(model_dir),
                         '{}/hift.pt'.format(model_dir))
-        os.remove('{}/llm_filtered.pt'.format(model_dir))
         
-        # Load and filter SLM checkpoint to remove training metadata
-        llm_checkpoint = torch.load('{}/slm.pt'.format(model_dir), map_location='cpu')
-        if isinstance(llm_checkpoint, dict) and 'model_state_dict' in llm_checkpoint:
-            llm_state_dict = llm_checkpoint['model_state_dict']
-        elif isinstance(llm_checkpoint, dict):
-            # Filter out training metadata keys
-            llm_state_dict = {k: v for k, v in llm_checkpoint.items() 
-                             if k not in ['epoch', 'step', 'optimizer_state_dict', 'scheduler_state_dict']}
-        else:
-            llm_state_dict = llm_checkpoint
-        
-        # Save filtered checkpoint temporarily
-        torch.save(llm_state_dict, '{}/slm_filtered.pt'.format(model_dir))
-        self.model.load_slm('{}/slm_filtered.pt'.format(model_dir))
-        os.remove('{}/slm_filtered.pt'.format(model_dir))
+        self.model.load_slm('{}/slm.pt'.format(model_dir))
         
         if load_vllm:
             self.model.load_vllm('{}/vllm'.format(model_dir))
@@ -203,7 +177,10 @@ class TASTE2Stage2:
         self,
         audio_16k: torch.Tensor,
         asr_model_dir: str = None,
-        text: str = None
+        text: str = None,
+        save_tokens: bool = False,
+        output_dir: str = None,
+        audio_basename: str = "audio"
     ):
         """Generate stage 2 output - to be implemented"""
         assert asr_model_dir is not None or text is not None
@@ -214,6 +191,16 @@ class TASTE2Stage2:
         else:
             asr_text = text
         text_token, text_token_len = self.frontend._extract_text_token(asr_text)
+        
+        # Detokenize original text tokens for verification
+        if save_tokens and output_dir is not None:
+            original_detokenized = self.frontend.tokenizer.decode(text_token[0].cpu().tolist())
+            tokens_path = os.path.join(output_dir, f"{audio_basename}_text_tokens_analysis.txt")
+            with open(tokens_path, 'w', encoding='utf-8') as f:
+                f.write(f"Original ASR text: {asr_text}\n")
+                f.write(f"Detokenized original text tokens: {original_detokenized}\n")
+                f.write(f"Original text tokens: {text_token[0].cpu().tolist()}\n")
+            print(f"Saved original text token analysis to: {tokens_path}")
         
         # 2. audio_16k -> (audio extractor) -> audio feature
         audio_token, audio_token_len = self.audio_extractor(audio_16k, [audio_16k.shape[-1]]) 
@@ -234,6 +221,16 @@ class TASTE2Stage2:
         new_text_tokens = torch.tensor([new_text_tokens], dtype=torch.int32).to(self.device)
         new_text_tokens_len = torch.tensor([new_text_tokens.shape[1]], dtype=torch.int32).to(self.device)
         new_taste_embs = torch.stack(new_taste_embs).unsqueeze(0).to(self.device)
+        
+        # Detokenize new text tokens and concatenated old+new tokens and append to the same file
+        if save_tokens and output_dir is not None:
+            new_detokenized = self.frontend.tokenizer.decode(new_text_tokens[0].cpu().tolist())
+            
+            tokens_path = os.path.join(output_dir, f"{audio_basename}_text_tokens_analysis.txt")
+            with open(tokens_path, 'a', encoding='utf-8') as f:
+                f.write(f"\nNew text tokens from SLM: {new_text_tokens[0].cpu().tolist()}\n")
+                f.write(f"Detokenized new text tokens: {new_detokenized}\n")
+            print(f"Appended new and combined text token analysis to: {tokens_path}")
         
         # 4. gather old, new text token & new taste emb -> llm -> speech (audio, s3) token
         s3_token_generator = self.model.llm.inference(
@@ -257,7 +254,7 @@ class TASTE2Stage2:
             s3_tokens.append(token)
         for token in s3_new_token_generator:
             s3_tokens.append(token)
-        
+
         s3_tokens = torch.tensor(s3_tokens, dtype=torch.long) if s3_tokens else torch.tensor([], dtype=torch.long)
         s3_tokens = s3_tokens.unsqueeze(dim=0)
         
@@ -323,7 +320,10 @@ if __name__ == '__main__':
         reconstructed_audio = taste_model.generation_stage2(
             audio_16k=audio_16k,
             asr_model_dir=asr_model_dir,
-            text=None  # Let it use ASR
+            text=None,  # Let it use ASR
+            save_tokens=True,
+            output_dir=output_dir,
+            audio_basename=audio_basename
         )
         
         print("Reconstruction successful!")

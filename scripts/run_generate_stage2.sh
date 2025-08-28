@@ -11,11 +11,13 @@ ASR_MODEL_DIR="openai/whisper-large-v3"
 # Define model directories
 MODEL_DIRS=(
     "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM-2/training/checkpoints/taste2-stage2-pretrain-310k-tiny"
+    # "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM-2/training/checkpoints/taste2-stage2-pretrain-400k-2B-470k"
 )
 
 # Define corresponding output directories
 OUTPUT_DIRS=(
     "./reconstruction_stage2/taste2-stage2-pretrain-310k-tiny"
+    # "./reconstruction_stage2/taste2-stage2-pretrain-400k-2B-470k"
 )
 
 # Define test files
