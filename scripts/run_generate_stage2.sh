@@ -15,7 +15,7 @@ MODEL_DIRS=(
 
 # Define corresponding output directories
 OUTPUT_DIRS=(
-    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM-2/reconstruction_stage2/taste2-stage2-pretrain-310k-tiny"
+    "./reconstruction_stage2/taste2-stage2-pretrain-310k-tiny"
 )
 
 # Define test files

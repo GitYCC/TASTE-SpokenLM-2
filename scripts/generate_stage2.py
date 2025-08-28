@@ -244,10 +244,10 @@ class TASTE2Stage2:
             sampling=25,
         )
         
-        s3_new_token_generator = self.model.llm.inference_for_taste_emb(
+        s3_new_token_generator = self.model.llm.inference(
             new_text_tokens,
             new_text_tokens_len,
-            new_taste_embs
+            taste_token_emb=new_taste_embs
         )
         
         # Collect all s3 tokens from the generator
