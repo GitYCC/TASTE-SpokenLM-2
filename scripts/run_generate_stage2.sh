@@ -1,75 +1,42 @@
 #!/bin/bash
 
-set -e
-# TASTE2 Stage 1 Audio Reconstruction Script
-# Usage: ./run_generate_stage1.sh
+# TASTE2 Audio Generation Script - Stage 2 Batch Processing
+# Usage: ./run_generate_stage2.sh
 
-# Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ASR_MODEL_DIR="openai/whisper-large-v3"
 
-# Define model directories
-MODEL_DIRS=(
-    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM-2/training/checkpoints/taste2-stage2-pretrain-310k-tiny"
-)
+# Configuration
+MODEL_DIR="/mnt/shared/NTU_TASLM/yc/TASTE-SpokenLM-2/training/checkpoints/taste2-stage2-pretrain-400k-1B-60k"
+OUTPUT_DIR="./reconstruction_stage2/taste2-stage2-pretrain-400k-1B-60k"
+ASR_MODEL="openai/whisper-large-v3"
 
-# Define corresponding output directories
-OUTPUT_DIRS=(
-    "./reconstruction_stage2/taste2-stage2-pretrain-310k-tiny"
-)
-
-# Define test files
+# Test files
 TEST_FILES=(
+    "/mnt/shared/NTU_TASLM/yc/TASTE-SpokenLM/examples/orig/conditional/cond-gen_1188_133604_000062_000001_cond.wav"
+    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/ex01_happy_00209.wav"
+    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/ex04_sad_00311.wav"
+    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/004.wav"
+    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/012.wav"
     # "/mnt/shared/NTU_TASLM/dienruei/data/emilia-en/data/test/emilia-dataset-train-02207-of-04908-taste.arrow"
-    # "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/ex01_happy_00209.wav"
-    # "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/ex04_sad_00311.wav"
-    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/001.wav"
-    # "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/004.wav"
-    # "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/012.wav"
 )
 
-echo "Running TASTE2 Stage 2 Audio Reconstruction..."
-echo "Models: ${#MODEL_DIRS[@]}"
+echo "Running TASTE2 Stage 2 Audio Generation..."
+echo "Model: $(basename "$MODEL_DIR")"
 echo "Test files: ${#TEST_FILES[@]}"
-echo "Total jobs: $((${#MODEL_DIRS[@]} * ${#TEST_FILES[@]}))"
-echo ""
 
-job_count=0
-total_jobs=$((${#MODEL_DIRS[@]} * ${#TEST_FILES[@]}))
+mkdir -p "$OUTPUT_DIR"
 
-# Loop through each model
-for i in "${!MODEL_DIRS[@]}"; do
-    MODEL_DIR="${MODEL_DIRS[$i]}"
-    OUTPUT_DIR="${OUTPUT_DIRS[$i]}"
-    
-    echo "Processing model: $(basename "$MODEL_DIR")"
-    
-    # Create output directory
-    mkdir -p "$OUTPUT_DIR"
+# Run batch processing with all files at once
+echo "Starting batch processing..."
+python "$SCRIPT_DIR/generate_audio.py" \
+    --model_dir "$MODEL_DIR" \
+    --output_dir "$OUTPUT_DIR" \
+    --test_files "${TEST_FILES[@]}" \
+    --asr_model_dir "$ASR_MODEL" \
+    --stage 2
 
-    # Loop through each test file
-    for TEST_FILE in "${TEST_FILES[@]}"; do
-        job_count=$((job_count + 1))
-        
-        echo "[$job_count/$total_jobs] Running reconstruction..."
-        echo "  Model: $(basename "$MODEL_DIR")"
-        echo "  Output: $OUTPUT_DIR"
-        echo "  Test File: $(basename "$TEST_FILE")"
-        
-        # Run the Python script
-        python "$SCRIPT_DIR/generate_stage2.py" \
-            --model_dir "$MODEL_DIR" \
-            --output_dir "$OUTPUT_DIR" \
-            --test_file "$TEST_FILE" \
-            --asr_model_dir "$ASR_MODEL_DIR"
-        
-        if [ $? -eq 0 ]; then
-            echo "  ✓ Completed successfully"
-        else
-            echo "  ✗ Failed"
-        fi
-        echo ""
-    done
-done
-
-echo "All reconstructions completed!"
+if [ $? -eq 0 ]; then
+    echo "✓ Batch processing completed successfully!"
+else
+    echo "✗ Batch processing failed"
+fi
