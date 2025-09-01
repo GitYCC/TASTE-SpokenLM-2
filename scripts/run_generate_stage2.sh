@@ -6,16 +6,8 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Configuration
-MODEL_DIR=(
-    # "/mnt/shared/NTU_TASLM/yc/TASTE-SpokenLM-2/training/checkpoints/taste2-stage2-pretrain-400k-1B-60k"
-    # "/mnt/shared/NTU_TASLM/models/taste2_stage2_2B_lora"
-    "/mnt/shared/NTU_TASLM/models/taste2_stage2_8B_lora"
-)
-OUTPUT_DIR=(
-    # "./reconstruction_stage2/taste2-stage2-pretrain-400k-1B-60k"
-    # "./reconstruction_stage2/taste2_stage2_2B_lora"
-    "./reconstruction_stage2/taste2_stage2_8B_lora"
-)
+MODEL_DIR="/mnt/shared/NTU_TASLM/yc/TASTE-SpokenLM-2/training/checkpoints/taste2-stage2-pretrain-400k-1B-60k"
+OUTPUT_DIR="./reconstruction_stage2/taste2-stage2-pretrain-400k-1B-60k"
 ASR_MODEL="openai/whisper-large-v3"
 
 # Test files
