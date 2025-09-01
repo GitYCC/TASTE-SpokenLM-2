@@ -229,9 +229,47 @@ class TransformerLM(torch.nn.Module):
 
 
 class Qwen2Encoder(torch.nn.Module):
-    def __init__(self, pretrain_path, attn_implementation='eager'):
+    def __init__(self, pretrain_path, attn_implementation='eager', use_lora=False, lora_config=None):
         super().__init__()
         self.model = Qwen2ForCausalLM.from_pretrained(pretrain_path, attn_implementation=attn_implementation)
+        self._use_lora = use_lora
+        if use_lora:
+            from peft import LoraConfig, get_peft_model
+            from taste_speech.modules_taste.utils import _find_all_linear_names
+
+            # build lora_config
+            lora_target_modules = list(lora_config['lora_target_modules'] or [])
+            if lora_config['lora_target_linear']:
+                linear_names = _find_all_linear_names(self.model)
+                lora_target_modules = list(set(lora_target_modules + linear_names))
+            lora_config = LoraConfig(
+                r=lora_config['lora_r'],
+                lora_alpha=lora_config['lora_alpha'],
+                target_modules=lora_target_modules,
+                layers_to_transform=None,
+                lora_dropout=lora_config['lora_dropout'],
+                fan_in_fan_out=lora_config['lora_fan_in_fan_out'],
+                modules_to_save=lora_config['lora_modules_to_save'] if lora_config['lora_modules_to_save'] else None,
+                bias="none",
+                task_type="CAUSAL_LM",
+            )
+            self.model = get_peft_model(self.model, lora_config)
+
+    def get_embed_tokens(self):
+        if self._use_lora:
+            base = self.model.base_model.model
+        else:
+            base = self.model
+
+        return base.model.embed_tokens
+
+    def get_lm_head(self):
+        if self._use_lora:
+            base = self.model.base_model.model
+        else:
+            base = self.model
+
+        return base.lm_head
 
     def forward(self, xs: torch.Tensor, xs_lens: torch.Tensor):
         T = xs.size(1)
