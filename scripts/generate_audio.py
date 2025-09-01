@@ -340,6 +340,7 @@ class TASTE2:
         
         slm_output_generator = self.model.slm.inference(
             **data,
+            min_len=3,
             max_len=20,
             sampling=25,
         )
