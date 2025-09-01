@@ -86,6 +86,8 @@ slm: !new:taste_speech.taste2.taste_slm.TasteSLM
         tokenizer_output_size: !ref <llm_output_size>
         llm_input_size: !ref <slm_input_size>
         class_name: 'weighted_sum'
+        fuse_config:
+            weight_init_type: 'zero_audio'
     out_module: !new:taste_speech.taste2.taste_slm.TasteSLMOut
         llm_output_size: !ref <slm_output_size>
         text_vocab_size: 151936  # Qwen2 vocab size

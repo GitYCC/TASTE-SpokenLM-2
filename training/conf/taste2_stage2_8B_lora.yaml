@@ -1,8 +1,8 @@
 # set random seed, so that you may reproduce your result.
-__set_seed1: !apply:random.seed [1986]
-__set_seed2: !apply:numpy.random.seed [1986]
-__set_seed3: !apply:torch.manual_seed [1986]
-__set_seed4: !apply:torch.cuda.manual_seed_all [1986]
+__set_seed1: !apply:random.seed [1313]
+__set_seed2: !apply:numpy.random.seed [1313]
+__set_seed3: !apply:torch.manual_seed [1313]
+__set_seed4: !apply:torch.cuda.manual_seed_all [1313]
 
 # fixed params
 sample_rate: 24000
@@ -17,11 +17,11 @@ qwen_pretrain_path_for_slm: '/mnt/shared/NTU_TASLM/yc/TASTE-SpokenLM-2/training/
 token_frame_rate: 25
 token_mel_ratio: 2
 attn_implementation: 'eager' #'sdpa'
-max_frames_in_batch: 6000 # original: 2000
-accum_grad: 1 # original: 2
+max_frames_in_batch: 1000 # original: 2000
+accum_grad: 4 # original: 2
 lr: 5e-5
 save_per_step: 10000  # production: 10000
-wandb_run_name: "250829-stage2-8B-LORA"
+wandb_run_name: "250829-stage2-8B-LORA-cont2"
 
 # stream related params
 chunk_size: 25 # streaming inference chunk size, in token
@@ -86,6 +86,8 @@ slm: !new:taste_speech.taste2.taste_slm.TasteSLM
         tokenizer_output_size: !ref <llm_output_size>
         llm_input_size: !ref <slm_input_size>
         class_name: 'weighted_sum'
+        fuse_config:
+            weight_init_type: 'zero_audio'
     out_module: !new:taste_speech.taste2.taste_slm.TasteSLMOut
         llm_output_size: !ref <slm_output_size>
         text_vocab_size: 152064  # Qwen2 8B vocab size (diff from 0.5B/1.5B: 151936)
