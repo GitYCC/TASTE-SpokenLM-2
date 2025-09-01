@@ -1,0 +1,64 @@
+{
+  "total_files": 5,
+  "successful_files": 5,
+  "failed_files": 0,
+  "stage": "2",
+  "model_dir": "/mnt/shared/NTU_TASLM/models/taste2_stage2_2B_lora",
+  "asr_model_dir": "openai/whisper-large-v3",
+  "files": [
+    {
+      "original_text": null,
+      "audio_basename": "cond-gen_1188_133604_000062_000001_cond",
+      "audio_file": "/mnt/shared/NTU_TASLM/yc/TASTE-SpokenLM/examples/orig/conditional/cond-gen_1188_133604_000062_000001_cond.wav",
+      "results": {
+        "stage2": {
+          "audio_path": "./reconstruction_stage2/taste2_stage2_2B_lora/cond-gen_1188_133604_000062_000001_cond_stage2_reconstructed.mp3",
+          "asr_text": " This is no longer",
+          "generated_text": " This is no longer an issue. You can no longer say, well, this is the same, I'm not even"
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "ex01_happy_00209",
+      "audio_file": "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/ex01_happy_00209.wav",
+      "results": {
+        "stage2": {
+          "audio_path": "./reconstruction_stage2/taste2_stage2_2B_lora/ex01_happy_00209_stage2_reconstructed.mp3",
+          "asr_text": " I love the movie Bend It Like Beckham.",
+          "generated_text": " I love the movie Bend It Like Beckham. It's about soccer, and it's so funny. I can't stop laughing when I see it"
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "ex04_sad_00311",
+      "audio_file": "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/ex04_sad_00311.wav",
+      "results": {
+        "stage2": {
+          "audio_path": "./reconstruction_stage2/taste2_stage2_2B_lora/ex04_sad_00311_stage2_reconstructed.mp3",
+          "asr_text": " Tomorrow in Laguna Beach, there's no chance it'll rain.",
+          "generated_text": " Tomorrow in Laguna Beach, there's no chance it'll rain. There's just a low probability."
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "004",
+      "audio_file": "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/004.wav",
+      "results": {
+        "stage2": {
+          "audio_path": "./reconstruction_stage2/taste2_stage2_2B_lora/004_stage2_reconstructed.mp3",
+          "asr_text": " See now, I have done your bidding, my father.",
+          "generated_text": " See now, I have done your bidding, my father. And it is your fault. I didn't come here to be put to work, but I am"
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "012",
+      "audio_file": "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/012.wav",
+      "results": {}
+    }
+  ]
+}

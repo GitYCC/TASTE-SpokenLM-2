@@ -1,0 +1,12 @@
+{
+  "original_text": null,
+  "audio_basename": "ex01_happy_00209",
+  "audio_file": "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/ex01_happy_00209.wav",
+  "results": {
+    "stage2": {
+      "audio_path": "./reconstruction_stage2/taste2_stage2_8B_lora/ex01_happy_00209_stage2_reconstructed.mp3",
+      "asr_text": " I love the movie Bend It Like Beckham.",
+      "generated_text": " I love the movie Bend It Like Beckham. What about you?"
+    }
+  }
+}
