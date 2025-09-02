@@ -5,14 +5,18 @@ import argparse
 import sys
 
 def print_pt_keys(file_path):
-    """Print all keys in a PyTorch checkpoint file."""
+    """Print all keys in a PyTorch checkpoint file with tensor dtype and size."""
     try:
         checkpoint = torch.load(file_path, map_location='cpu')
         
         if isinstance(checkpoint, dict):
             print(f"Keys in {file_path}:")
             for key in sorted(checkpoint.keys()):
-                print(f"  {key}")
+                value = checkpoint[key]
+                if isinstance(value, torch.Tensor):
+                    print(f"  {key}: {value.dtype}, size={tuple(value.shape)}")
+                else:
+                    print(f"  {key}: {type(value).__name__}")
         else:
             print(f"File {file_path} contains a {type(checkpoint)} object, not a dictionary")
             

@@ -229,9 +229,10 @@ class TransformerLM(torch.nn.Module):
 
 
 class Qwen2Encoder(torch.nn.Module):
-    def __init__(self, pretrain_path, attn_implementation='eager', use_lora=False, lora_config=None):
+    def __init__(self, pretrain_path, attn_implementation='eager', torch_dtype=torch.bfloat16, use_lora=False, lora_config=None):
         super().__init__()
-        self.model = Qwen2ForCausalLM.from_pretrained(pretrain_path, attn_implementation=attn_implementation)
+        self.model = Qwen2ForCausalLM.from_pretrained(pretrain_path, attn_implementation=attn_implementation, torch_dtype=torch_dtype)
+        self.torch_dtype = torch_dtype
         self._use_lora = use_lora
         if use_lora:
             from peft import LoraConfig, get_peft_model
@@ -255,23 +256,24 @@ class Qwen2Encoder(torch.nn.Module):
             )
             self.model = get_peft_model(self.model, lora_config)
 
-    def get_embed_tokens(self):
+    def forward_embed_tokens(self, text_token):
         if self._use_lora:
             base = self.model.base_model.model
         else:
             base = self.model
 
-        return base.model.embed_tokens
+        return base.model.embed_tokens(text_token)
 
-    def get_lm_head(self):
+    def forward_lm_head(self, hidden):
         if self._use_lora:
             base = self.model.base_model.model
         else:
             base = self.model
 
-        return base.lm_head
+        return base.lm_head(hidden)
 
     def forward(self, xs: torch.Tensor, xs_lens: torch.Tensor):
+        xs = xs.to(self.torch_dtype)
         T = xs.size(1)
         masks = ~make_pad_mask(xs_lens, T)
         outs = self.model(
@@ -283,6 +285,7 @@ class Qwen2Encoder(torch.nn.Module):
         return outs.hidden_states[-1], masks.unsqueeze(1)
 
     def forward_one_step(self, xs, masks, cache=None):
+        xs = xs.to(self.torch_dtype)
         input_masks = masks[:, -1, :]
         outs = self.model(
             inputs_embeds=xs,
@@ -537,7 +540,7 @@ class Qwen2LM(TransformerLM):
                 y_pred, cache = self.llm.forward_one_step(lm_input,
                                                           masks=torch.tril(torch.ones((1, lm_input.shape[1], lm_input.shape[1]), device=lm_input.device)).to(torch.bool),
                                                           cache=cache)
-                logp = self.llm_decoder(y_pred[:, -1]).log_softmax(dim=-1)
+                logp = self.llm_decoder(y_pred.float()[:, -1]).log_softmax(dim=-1)
                 top_ids = self.sampling_ids(logp.squeeze(dim=0), out_tokens, sampling, ignore_eos=True if i < min_len else False).item()
                 if top_ids == self.speech_token_size:
                     break

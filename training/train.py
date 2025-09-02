@@ -19,6 +19,7 @@ import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 from copy import deepcopy
 import os
+import shutil
 import torch
 import torch.distributed as dist
 import deepspeed
@@ -128,6 +129,14 @@ def main():
 
     # Do some sanity checks and save config to arsg.model_dir
     configs = check_modify_and_save_config(args, configs)
+    
+    # Copy YAML config file to model output folder
+    if os.path.exists(args.config):
+        os.makedirs(args.model_dir, exist_ok=True)
+        config_filename = os.path.basename(args.config)
+        dest_config_path = os.path.join(args.model_dir, config_filename)
+        shutil.copy2(args.config, dest_config_path)
+        logging.info(f'Copied config file {args.config} to {dest_config_path}')
 
     # Tensorboard summary
     writer = init_summarywriter(args, configs)
