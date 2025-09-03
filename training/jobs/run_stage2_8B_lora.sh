@@ -1,6 +1,6 @@
 #!/bin/bash
 
-source training/path.sh || exit 1;
+export PYTHONIOENCODING=UTF-8;
 
 # train slm
 yaml_name="taste2_stage2_8B_lora"
@@ -31,7 +31,7 @@ torchrun --nnodes=1 --nproc_per_node=$num_gpus \
   --cv_data /mnt/shared/NTU_TASLM/yc/prepared_dataset/dev.data.list \
   --qwen_pretrain_path $stage1_checkpoint/CosyVoice-BlankEN \
   --model slm \
-  --checkpoint '' \
+  --checkpoint '/mnt/shared/NTU_TASLM/yc/TASTE-SpokenLM-2/training/exp/taste2_stage2_8B_lora/epoch_1_step_40000.pt' \
   --model_dir training/exp/$yaml_name/ \
   --tensorboard_dir training/tensorboard/$yaml_name/ \
   --ddp.dist_backend $dist_backend \

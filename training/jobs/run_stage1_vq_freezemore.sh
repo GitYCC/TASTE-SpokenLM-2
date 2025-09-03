@@ -1,6 +1,6 @@
 #!/bin/bash
 
-source training/path.sh || exit 1;
+export PYTHONIOENCODING=UTF-8;
 
 # train llm
 yaml_name="taste2_stage1_vq_freezemore"

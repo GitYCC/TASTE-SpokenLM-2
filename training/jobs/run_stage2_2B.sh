@@ -1,6 +1,6 @@
 #!/bin/bash
 
-source training/path.sh || exit 1;
+export PYTHONIOENCODING=UTF-8;
 
 # train slm
 yaml_name="taste2_stage2_2B"
