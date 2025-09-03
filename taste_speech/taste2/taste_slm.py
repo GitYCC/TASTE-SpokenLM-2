@@ -469,6 +469,77 @@ class TasteSLM(nn.Module):
         
         return lm_text_target, lm_taste_latent_target, lm_taste_mask, lm_input, lm_input_len
 
+    def _prepare_for_sft_training(self, batch, device):
+        processed_list = []
+        for instance in batch['data']:
+            text_token_list, text_token_len_list, taste_token_emb_list, taste_latent_list = [], [], [], []
+            for x in instance['messages']:
+                assert x['text_token'].size(0) == 1
+                seg_text_token = x['text_token']
+                seg_text_token_len = x['text_token_len']
+                if x['role'] != 'system':
+                    tokenized = self.taste_stage1.taste_tokenizer(seg_text_token, seg_text_token_len, x['audio_feature'], x['audio_feature_len'])
+                    seg_taste_emb = tokenized['taste_token_emb'].detach()
+                    seg_taste_latent = tokenized['taste_latent'].detach()
+                
+                if x['role'] == 'system':
+                    seg_text_token = ...# TODO: padding
+                    seg_text_token_len = ...# TODO: padding
+                    seg_taste_emb = ... # TODO: padding
+                    seg_taste_latent = ... # TODO: padding
+                elif x['role'] == 'user':
+                    seg_text_token = ...# TODO: add + padding
+                    seg_text_token_len = ...# TODO: add + padding
+                    seg_taste_emb = ... # TODO: add + padding
+                    seg_taste_latent = ... # TODO: add + padding
+                elif x['role'] == 'assistant':
+                    seg_text_token = ...# TODO: add + padding
+                    seg_text_token_len = ...# TODO: add + padding
+                    seg_taste_emb = ... # TODO: add + padding
+                    seg_taste_latent = ... # TODO: add + padding
+
+                text_token_list.append(seg_text_token)
+                text_token_len_list.append(seg_text_token_len)
+                taste_token_emb_list.append(seg_taste_emb)
+                taste_latent_list.append(seg_taste_latent)
+    
+            # Length-wise concatenation for each instance
+            if len(text_token_list) > 0:
+                # Concatenate text tokens along sequence dimension
+                concatenated_text_token = torch.cat(text_token_list, dim=1)
+                # Sum up all text token lengths for this instance
+                concatenated_text_token_len = sum(text_token_len_list)
+                # Concatenate taste embeddings along sequence dimension  
+                concatenated_taste_token_emb = torch.cat(taste_token_emb_list, dim=1)
+                # Concatenate taste latents along sequence dimension
+                concatenated_taste_latent = torch.cat(taste_latent_list, dim=1)
+                
+                processed_list.append(
+                    {
+                        'text_token': concatenated_text_token,
+                        'text_token_len': concatenated_text_token_len,
+                        'taste_token_emb': concatenated_taste_token_emb,
+                        'taste_latent': concatenated_taste_latent,
+                    }
+                )
+        # Batch-wise concatenation using pad_sequence
+        if len(processed_list) > 0:
+            # Extract data from all processed instances
+            text_tokens = [item['text_token'].squeeze(0) for item in processed_list]  # Remove batch dim
+            text_token_lengths = [item['text_token_len'].item() if isinstance(item['text_token_len'], torch.Tensor) else item['text_token_len'] for item in processed_list]
+            taste_token_embs = [item['taste_token_emb'].squeeze(0) for item in processed_list]  # Remove batch dim 
+            taste_latents = [item['taste_latent'].squeeze(0) for item in processed_list]  # Remove batch dim
+            
+            # Use pad_sequence to create batched tensors
+            text_token = pad_sequence(text_tokens, batch_first=True, padding_value=self.ignore_id).to(device)
+            text_token_len = torch.tensor(text_token_lengths, dtype=torch.long).to(device)
+            taste_token_emb = pad_sequence(taste_token_embs, batch_first=True, padding_value=0.0).to(device)
+            taste_latent = pad_sequence(taste_latents, batch_first=True, padding_value=0.0).to(device)
+        else:
+            # Handle empty processed_list case
+            raise ValueError("No valid instances found in sft_training batch")
+        return (text_token, text_token_len, taste_token_emb, taste_latent)
+
     def forward(
         self,
         batch: dict,
@@ -501,21 +572,23 @@ class TasteSLM(nn.Module):
                 - taste_loss: Taste-specific loss component
                 - z: Predicted taste latent representations
         """
-        # Extract and move input tensors to the specified device
-        text_token = batch['text_token'].to(device)
-        text_token_len = batch['text_token_len'].to(device)
-        audio_feature = batch['audio_feature'].to(device)
-        audio_feature_len = batch['audio_feature_len'].to(device)
+        if batch.get('sft_training') is True:
+            text_token, text_token_len, taste_token_emb, taste_latent = self._prepare_for_sft_training(batch, device)
+        else:
+            # Extract and move input tensors to the specified device
+            text_token = batch['text_token'].to(device)
+            text_token_len = batch['text_token_len'].to(device)
+            audio_feature = batch['audio_feature'].to(device)
+            audio_feature_len = batch['audio_feature_len'].to(device)
 
-        # Step 1: Encode text tokens using the SLM's embedding layer
+            # Encode audio features to taste token embeddings using taste tokenizer
+            tokenized = self.taste_stage1.taste_tokenizer(text_token, text_token_len, audio_feature, audio_feature_len)
+            taste_token_emb = tokenized['taste_token_emb']
+            taste_latent = tokenized['taste_latent']
+
         text_token_emb = self.slm.forward_embed_tokens(text_token)
 
-        # Step 2: Encode audio features to taste token embeddings using taste tokenizer
-        tokenized = self.taste_stage1.taste_tokenizer(text_token, text_token_len, audio_feature, audio_feature_len)
-        taste_token_emb = tokenized['taste_token_emb']
-        taste_latent = tokenized['taste_latent']
-
-        # Step 3: Prepare aligned language model inputs and targets
+        # Prepare aligned language model inputs and targets
         lm_text_target, lm_taste_latent_target, lm_taste_mask, lm_input, lm_input_len = \
             self.prepare_lm_input_target(text_token, text_token_emb.float(), text_token_len, 
                 taste_latent=taste_latent,
