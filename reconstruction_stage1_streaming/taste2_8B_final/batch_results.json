@@ -1,0 +1,25 @@
+{
+  "total_files": 1,
+  "successful_files": 1,
+  "failed_files": 0,
+  "stage": "1",
+  "streaming": true,
+  "model_dir": "/mnt/shared/NTU_TASLM/models/taste2_8B_final",
+  "asr_model_dir": "openai/whisper-large-v3",
+  "files": [
+    {
+      "original_text": null,
+      "audio_basename": "004",
+      "audio_file": "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/004.wav",
+      "results": {
+        "stage1_streaming": {
+          "final_audio_path": "./reconstruction_stage1_streaming/taste2_8B_final/004_streaming_final_crossfaded.wav",
+          "single_audio_path": "./reconstruction_stage1_streaming/taste2_8B_final/004_single_from_all_tokens.wav",
+          "asr_text": " See now, I have done your bidding, my father.",
+          "total_chunks": 4,
+          "streaming_summary_path": "./reconstruction_stage1_streaming/taste2_8B_final/004_streaming_summary.json"
+        }
+      }
+    }
+  ]
+}

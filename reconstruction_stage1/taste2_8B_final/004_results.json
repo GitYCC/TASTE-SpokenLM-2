@@ -1,0 +1,11 @@
+{
+  "original_text": null,
+  "audio_basename": "004",
+  "audio_file": "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/004.wav",
+  "results": {
+    "stage1": {
+      "audio_path": "./reconstruction_stage1/taste2_8B_final/004_stage1_reconstructed.mp3",
+      "asr_text": " See now, I have done your bidding, my father."
+    }
+  }
+}
