@@ -1,0 +1,17 @@
+{
+  "audio_basename": "cond-gen_1188_133604_000062_000001_cond",
+  "asr_text": " This is no longer",
+  "total_chunks": 5,
+  "chunk_files": [
+    "./reconstruction_stage2_streaming/taste2_8B_final/cond-gen_1188_133604_000062_000001_cond_chunk_001.wav",
+    "./reconstruction_stage2_streaming/taste2_8B_final/cond-gen_1188_133604_000062_000001_cond_chunk_002.wav",
+    "./reconstruction_stage2_streaming/taste2_8B_final/cond-gen_1188_133604_000062_000001_cond_chunk_003.wav",
+    "./reconstruction_stage2_streaming/taste2_8B_final/cond-gen_1188_133604_000062_000001_cond_chunk_004.wav",
+    "./reconstruction_stage2_streaming/taste2_8B_final/cond-gen_1188_133604_000062_000001_cond_chunk_005.wav"
+  ],
+  "final_crossfaded_path": "./reconstruction_stage2_streaming/taste2_8B_final/cond-gen_1188_133604_000062_000001_cond_streaming_final_crossfaded.wav",
+  "single_audio_path": "./reconstruction_stage2_streaming/taste2_8B_final/cond-gen_1188_133604_000062_000001_cond_single_from_all_tokens.wav",
+  "ground_truth_text": null,
+  "stage": "2",
+  "streaming": true
+}

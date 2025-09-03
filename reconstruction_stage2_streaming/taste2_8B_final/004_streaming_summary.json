@@ -1,0 +1,15 @@
+{
+  "audio_basename": "004",
+  "asr_text": " See now, I have done your bidding, my father.",
+  "total_chunks": 3,
+  "chunk_files": [
+    "./reconstruction_stage2_streaming/taste2_8B_final/004_chunk_001.wav",
+    "./reconstruction_stage2_streaming/taste2_8B_final/004_chunk_002.wav",
+    "./reconstruction_stage2_streaming/taste2_8B_final/004_chunk_003.wav"
+  ],
+  "final_crossfaded_path": "./reconstruction_stage2_streaming/taste2_8B_final/004_streaming_final_crossfaded.wav",
+  "single_audio_path": "./reconstruction_stage2_streaming/taste2_8B_final/004_single_from_all_tokens.wav",
+  "ground_truth_text": null,
+  "stage": "2",
+  "streaming": true
+}

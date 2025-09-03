@@ -1,0 +1,25 @@
+{
+  "total_files": 1,
+  "successful_files": 1,
+  "failed_files": 0,
+  "stage": "2",
+  "streaming": true,
+  "model_dir": "/mnt/shared/NTU_TASLM/models/taste2_8B_final",
+  "asr_model_dir": "openai/whisper-large-v3",
+  "files": [
+    {
+      "original_text": null,
+      "audio_basename": "cond-gen_1188_133604_000062_000001_cond",
+      "audio_file": "/mnt/shared/NTU_TASLM/yc/TASTE-SpokenLM/examples/orig/conditional/cond-gen_1188_133604_000062_000001_cond.wav",
+      "results": {
+        "stage2_streaming": {
+          "final_audio_path": "./reconstruction_stage2_streaming/taste2_8B_final/cond-gen_1188_133604_000062_000001_cond_streaming_final_crossfaded.wav",
+          "single_audio_path": "./reconstruction_stage2_streaming/taste2_8B_final/cond-gen_1188_133604_000062_000001_cond_single_from_all_tokens.wav",
+          "asr_text": " This is no longer",
+          "total_chunks": 5,
+          "streaming_summary_path": "./reconstruction_stage2_streaming/taste2_8B_final/cond-gen_1188_133604_000062_000001_cond_streaming_summary.json"
+        }
+      }
+    }
+  ]
+}
