@@ -37,7 +37,7 @@ from torch.utils.data import DataLoader, Dataset, DistributedSampler
 import torchaudio
 from tqdm import tqdm
 
-import s3tokenizer
+import s3tokenizer  # need to install from `pip install s3tokenizer`
 
 # Setup logging
 logger = logging.getLogger(__name__)
