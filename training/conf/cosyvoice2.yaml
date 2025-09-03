@@ -20,22 +20,22 @@ num_decoding_left_chunks: -1 # streaming inference flow decoder left chunk size,
 # model params
 # for all class/function included in this repo, we use !<name> or !<new> for intialization, so that user may find all corresponding class/function according to one single yaml.
 # for system/third_party class/function, we do not require this.
-llm: !new:cosyvoice.llm.llm.Qwen2LM
+llm: !new:taste_speech.taste2.cosyvoice.llm.llm.Qwen2LM
     llm_input_size: !ref <llm_input_size>
     llm_output_size: !ref <llm_output_size>
     speech_token_size: 6561
     length_normalized_loss: True
     lsm_weight: 0
     mix_ratio: [5, 15]
-    llm: !new:cosyvoice.llm.llm.Qwen2Encoder
+    llm: !new:taste_speech.taste2.cosyvoice.llm.llm.Qwen2Encoder
         pretrain_path: !ref <qwen_pretrain_path>
-    sampling: !name:cosyvoice.utils.common.ras_sampling
+    sampling: !name:taste_speech.taste2.cosyvoice.utils.common.ras_sampling
         top_p: 0.8
         top_k: 25
         win_size: 10
         tau_r: 0.1
 
-flow: !new:cosyvoice.flow.flow.CausalMaskedDiffWithXvec
+flow: !new:taste_speech.taste2.cosyvoice.flow.flow.CausalMaskedDiffWithXvec
     input_size: 512
     output_size: 80
     spk_embed_dim: !ref <spk_embed_dim>
@@ -45,7 +45,7 @@ flow: !new:cosyvoice.flow.flow.CausalMaskedDiffWithXvec
     only_mask_loss: True
     token_mel_ratio: !ref <token_mel_ratio>
     pre_lookahead_len: 3
-    encoder: !new:cosyvoice.transformer.upsample_encoder.UpsampleConformerEncoder
+    encoder: !new:taste_speech.taste2.cosyvoice.transformer.upsample_encoder.UpsampleConformerEncoder
         output_size: 512
         attention_heads: 8
         linear_units: 2048
@@ -61,7 +61,7 @@ flow: !new:cosyvoice.flow.flow.CausalMaskedDiffWithXvec
         use_cnn_module: False
         macaron_style: False
         static_chunk_size: !ref <chunk_size>
-    decoder: !new:cosyvoice.flow.flow_matching.CausalConditionalCFM
+    decoder: !new:taste_speech.taste2.cosyvoice.flow.flow_matching.CausalConditionalCFM
         in_channels: 240
         n_spks: 1
         spk_emb_dim: 80
@@ -73,7 +73,7 @@ flow: !new:cosyvoice.flow.flow.CausalMaskedDiffWithXvec
                 training_cfg_rate: 0.2
                 inference_cfg_rate: 0.7
                 reg_loss_type: 'l1'
-        estimator: !new:cosyvoice.flow.decoder.CausalConditionalDecoder
+        estimator: !new:taste_speech.taste2.cosyvoice.flow.decoder.CausalConditionalDecoder
             in_channels: 320
             out_channels: 80
             channels: [256]
@@ -86,7 +86,7 @@ flow: !new:cosyvoice.flow.flow.CausalMaskedDiffWithXvec
             static_chunk_size: !ref <chunk_size> * <token_mel_ratio>
             num_decoding_left_chunks: !ref <num_decoding_left_chunks>
 
-hift: !new:cosyvoice.hifigan.generator.HiFTGenerator
+hift: !new:taste_speech.taste2.cosyvoice.hifigan.generator.HiFTGenerator
     in_channels: 80
     base_channels: 512
     nb_harmonics: 8
@@ -105,13 +105,13 @@ hift: !new:cosyvoice.hifigan.generator.HiFTGenerator
     source_resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
     lrelu_slope: 0.1
     audio_limit: 0.99
-    f0_predictor: !new:cosyvoice.hifigan.f0_predictor.ConvRNNF0Predictor
+    f0_predictor: !new:taste_speech.taste2.cosyvoice.hifigan.f0_predictor.ConvRNNF0Predictor
         num_class: 1
         in_channels: 80
         cond_channels: 512
 
 # gan related module
-mel_spec_transform1: !name:matcha.utils.audio.mel_spectrogram
+mel_spec_transform1: !name:taste_speech.taste2.matcha.utils.audio.mel_spectrogram
     n_fft: 1920
     num_mels: 80
     sampling_rate: !ref <sample_rate>
@@ -120,34 +120,34 @@ mel_spec_transform1: !name:matcha.utils.audio.mel_spectrogram
     fmin: 0
     fmax: null
     center: False
-hifigan: !new:cosyvoice.hifigan.hifigan.HiFiGan
+hifigan: !new:taste_speech.taste2.cosyvoice.hifigan.hifigan.HiFiGan
     generator: !ref <hift>
-    discriminator: !new:cosyvoice.hifigan.discriminator.MultipleDiscriminator
-        mpd: !new:matcha.hifigan.models.MultiPeriodDiscriminator
-        mrd: !new:cosyvoice.hifigan.discriminator.MultiResSpecDiscriminator
+    discriminator: !new:taste_speech.taste2.cosyvoice.hifigan.discriminator.MultipleDiscriminator
+        mpd: !new:taste_speech.taste2.matcha.hifigan.models.MultiPeriodDiscriminator
+        mrd: !new:taste_speech.taste2.cosyvoice.hifigan.discriminator.MultiResSpecDiscriminator
     mel_spec_transform: [
         !ref <mel_spec_transform1>
     ]
 
 # processor functions
-parquet_opener: !name:cosyvoice.dataset.processor.parquet_opener
-get_tokenizer: !name:cosyvoice.tokenizer.tokenizer.get_qwen_tokenizer
+parquet_opener: !name:taste_speech.taste2.cosyvoice.dataset.processor.parquet_opener
+get_tokenizer: !name:taste_speech.taste2.cosyvoice.tokenizer.tokenizer.get_qwen_tokenizer
     token_path: !ref <qwen_pretrain_path>
     skip_special_tokens: True
 allowed_special: 'all'
-tokenize: !name:cosyvoice.dataset.processor.tokenize
+tokenize: !name:taste_speech.taste2.cosyvoice.dataset.processor.tokenize
     get_tokenizer: !ref <get_tokenizer>
     allowed_special: !ref <allowed_special>
-filter: !name:cosyvoice.dataset.processor.filter
+filter: !name:taste_speech.taste2.cosyvoice.dataset.processor.filter
     max_length: 40960
     min_length: 100
     token_max_length: 200
     token_min_length: 1
-resample: !name:cosyvoice.dataset.processor.resample
+resample: !name:taste_speech.taste2.cosyvoice.dataset.processor.resample
     resample_rate: !ref <sample_rate>
-truncate: !name:cosyvoice.dataset.processor.truncate
+truncate: !name:taste_speech.taste2.cosyvoice.dataset.processor.truncate
     truncate_length: 24480 # must be a multiplier of hop_size
-feat_extractor: !name:matcha.utils.audio.mel_spectrogram
+feat_extractor: !name:taste_speech.taste2.matcha.utils.audio.mel_spectrogram
     n_fft: 1920
     num_mels: 80
     sampling_rate: !ref <sample_rate>
@@ -156,22 +156,22 @@ feat_extractor: !name:matcha.utils.audio.mel_spectrogram
     fmin: 0
     fmax: 8000
     center: False
-compute_fbank: !name:cosyvoice.dataset.processor.compute_fbank
+compute_fbank: !name:taste_speech.taste2.cosyvoice.dataset.processor.compute_fbank
     feat_extractor: !ref <feat_extractor>
     token_mel_ratio: 2
-compute_f0: !name:cosyvoice.dataset.processor.compute_f0
+compute_f0: !name:taste_speech.taste2.cosyvoice.dataset.processor.compute_f0
     sample_rate: !ref <sample_rate>
     hop_size: 480
-parse_embedding: !name:cosyvoice.dataset.processor.parse_embedding
+parse_embedding: !name:taste_speech.taste2.cosyvoice.dataset.processor.parse_embedding
     normalize: True
-shuffle: !name:cosyvoice.dataset.processor.shuffle
+shuffle: !name:taste_speech.taste2.cosyvoice.dataset.processor.shuffle
     shuffle_size: 1000
-sort: !name:cosyvoice.dataset.processor.sort
+sort: !name:taste_speech.taste2.cosyvoice.dataset.processor.sort
     sort_size: 500  # sort_size should be less than shuffle_size
-batch: !name:cosyvoice.dataset.processor.batch
+batch: !name:taste_speech.taste2.cosyvoice.dataset.processor.batch
     batch_type: 'dynamic'
     max_frames_in_batch: 2000
-padding: !name:cosyvoice.dataset.processor.padding
+padding: !name:taste_speech.taste2.cosyvoice.dataset.processor.padding
     use_spk_embedding: False # change to True during sft
 
 

@@ -1,0 +1,11 @@
+{
+  "original_text": null,
+  "audio_basename": "001",
+  "audio_file": "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/001.wav",
+  "results": {
+    "stage1": {
+      "audio_path": "./reconstruction_stage2/taste2-stage1-pretrain-400k/001_stage1_reconstructed.mp3",
+      "asr_text": " Neither has it been possible for the writer of it to render the full force of the Zulu idiom, nor to convey a picture of the teller."
+    }
+  }
+}

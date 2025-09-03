@@ -21,9 +21,9 @@ sys.path.insert(0, cosyvoice_root)
 from hyperpyyaml import load_hyperpyyaml
 from torch.distributed.elastic.multiprocessing.errors import record
 
-from cosyvoice.utils.losses import DPOLoss
-from cosyvoice.utils.executor import Executor
-from cosyvoice.utils.train_utils import (
+from taste_speech.taste2.cosyvoice.utils.losses import DPOLoss
+from taste_speech.taste2.cosyvoice.utils.executor import Executor
+from taste_speech.taste2.cosyvoice.utils.train_utils import (
     init_distributed,
     init_dataset_and_dataloader,
     init_summarywriter,

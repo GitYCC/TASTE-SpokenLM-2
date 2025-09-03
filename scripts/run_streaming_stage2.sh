@@ -7,7 +7,7 @@ set -e  # Exit on any error
 
 # Configuration
 MODEL_DIR="/mnt/shared/NTU_TASLM/models/taste2_8B_final"
-OUTPUT_DIR="./reconstruction_stage2_streaming/taste2_8B_final"
+OUTPUT_DIR="./results/stage2_streaming/taste2_8B_final"
 # TEST_FILE="/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/004.wav"
 TEST_FILE="/mnt/shared/NTU_TASLM/yc/TASTE-SpokenLM/examples/orig/conditional/cond-gen_1188_133604_000062_000001_cond.wav"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

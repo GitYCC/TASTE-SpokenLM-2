@@ -1,0 +1,12 @@
+{
+  "original_text": null,
+  "audio_basename": "cond-gen_1188_133604_000062_000001_cond",
+  "audio_file": "/mnt/shared/NTU_TASLM/yc/TASTE-SpokenLM/examples/orig/conditional/cond-gen_1188_133604_000062_000001_cond.wav",
+  "results": {
+    "stage2": {
+      "audio_path": "./results/stage2/taste2_8B_final/cond-gen_1188_133604_000062_000001_cond_stage2_reconstructed.mp3",
+      "asr_text": " This is no longer",
+      "generated_text": " This is no longer about the mission, it's about, how am I going to look on this call sheet? And"
+    }
+  }
+}

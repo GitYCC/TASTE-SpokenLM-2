@@ -18,9 +18,9 @@ import torchaudio
 import numpy as np
 from torch.nn import functional as F
 
-from cosyvoice.cli.frontend import CosyVoiceFrontEnd
-from cosyvoice.utils.file_utils import logging
-from cosyvoice.utils.common import fade_in_out
+from taste_speech.taste2.cosyvoice.cli.frontend import CosyVoiceFrontEnd
+from taste_speech.taste2.cosyvoice.utils.file_utils import logging
+from taste_speech.taste2.cosyvoice.utils.common import fade_in_out
 
 def print_green(text):
     """Print text in green color"""

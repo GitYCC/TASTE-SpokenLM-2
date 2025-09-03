@@ -1,0 +1,11 @@
+{
+  "original_text": null,
+  "audio_basename": "012",
+  "audio_file": "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/012.wav",
+  "results": {
+    "stage1": {
+      "audio_path": "./results/stage1/taste2_8B_final/012_stage1_reconstructed.mp3",
+      "asr_text": " Before 1849, the forest properties which the Crown or State owned in the various territories were not managed as a unit or in any uniform manner, but a number of separate provincial or territorial forest administrations existed which were often connected with mining administrations and were placed under the Minister of Finance."
+    }
+  }
+}

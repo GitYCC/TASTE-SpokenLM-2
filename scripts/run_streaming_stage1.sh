@@ -7,7 +7,7 @@ set -e  # Exit on any error
 
 # Configuration
 MODEL_DIR="/mnt/shared/NTU_TASLM/models/taste2_8B_final"
-OUTPUT_DIR="./reconstruction_stage1_streaming/taste2_8B_final"
+OUTPUT_DIR="./results/stage1_streaming/taste2_8B_final"
 TEST_FILE="/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/004.wav"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
