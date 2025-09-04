@@ -2,6 +2,7 @@
 system segment: `<|im_start|>System\n...<|im_end|>`  
 user segment: `<|im_start|>User\n...<|im_end|>`  
 assistant segment: `<|im_start|>Assistant\n...<|im_end|>`  
+相接不用任何`\n`符號  
 
 Only single system segment locate at head.  
 Then ordering: assistant(with 開頭詞) -> user -> assistant -> user -> ...  
