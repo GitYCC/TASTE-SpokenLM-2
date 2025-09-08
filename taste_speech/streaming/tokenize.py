@@ -1,44 +1,39 @@
 """
-TASTE tokenization: Convert audio waveform to TASTE tokens aligned with text.
+TASTE2 tokenization: Convert audio waveform to TASTE tokens aligned with text.
 """
 
 import torch
 import torchaudio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from ..modeling_taste import TasteForCausalLM
-    from ..processing_taste import TasteProcessor
+    from ..modeling_taste2 import Taste2ForCausalLM
 
 
 def taste_tokenize(
-    model: "TasteForCausalLM",
-    processor: "TasteProcessor", 
+    model: "Taste2ForCausalLM",
     audio: torch.Tensor,
     token_ids: torch.Tensor,
-    word_ids: torch.Tensor,
     sampling_rate: int = 16000
 ) -> torch.Tensor:
     """
-    Convert audio waveform to TASTE token indices aligned with text tokens.
+    Convert audio waveform to TASTE token embeddings aligned with provided text tokens.
     
-    This function extracts vector quantized (VQ) representations from audio
-    that are temporally aligned with the provided text token sequence.
+    This function performs only TASTE tokenization using the audio and pre-computed text tokens.
+    It does NOT perform ASR or text tokenization - those should be done beforehand.
     
     Args:
-        model: TasteForCausalLM model with audio_tower for VQ extraction
-        processor: TasteProcessor with feature extraction capabilities
+        model: Taste2ForCausalLM model with tokenization capabilities
         audio: Input audio waveform tensor of shape (1, num_samples) 
         token_ids: Text token IDs tensor of shape (1, seq_len)
-        word_ids: Word ID tensor for word-level alignment (1, seq_len). Required for joint encoder segmenter.
         sampling_rate: Input audio sampling rate in Hz (will be resampled to 16000 if different)
     
     Returns:
-        torch.Tensor: TASTE token indices of shape (1, seq_len, vq_dim)
+        torch.Tensor: TASTE token embeddings of shape (1, seq_len, embed_dim)
         
     Raises:
-        AssertionError: If batch sizes of audio and token_ids don't match
         ValueError: If audio or token_ids have incorrect shapes
+        AssertionError: If batch sizes don't match
     """
     
     # Validate inputs
@@ -49,14 +44,13 @@ def taste_tokenize(
     
     if audio.ndim != 2:
         raise ValueError("audio must have shape (1, num_samples)")
-    if token_ids.ndim != 2:  
+    if token_ids.ndim != 2:
         raise ValueError("token_ids must have shape (1, seq_len)")
     
-    # Ensure batch size alignment (critical requirement from PRP)
+    # Ensure batch size alignment
     assert audio.size(0) == token_ids.size(0) == 1, "Batch size must be 1 for both audio and token_ids"
     
     device = model.device
-    dtype = next(model.parameters()).dtype
     
     # Resample audio to model's expected sampling rate (16000 Hz) if needed
     target_sr = 16000
@@ -69,44 +63,102 @@ def taste_tokenize(
     token_ids = token_ids.to(device)
     
     with torch.no_grad():
-        # Step 1: Extract audio features using the processor's feature extractor
-        # Convert audio to numpy for WhisperFrontend compatibility
-        audio_np = audio.cpu().numpy()[0]  # Remove batch dimension for processor
+        # Extract audio features using the model's audio extractor
+        audio_feature, audio_feature_len = model.audio_extractor(audio, [audio.shape[-1]])
         
-        # Use processor's whisper feature extractor
-        audio_features, audio_feature_lengths = processor.whisper_feature_extractor(
-            torch.tensor([audio_np], dtype=torch.float32), [audio_np.shape[0]]
-        )
+        # Convert to model dtype if using fp16
+        if model.config.fp16:
+            audio_feature = audio_feature.half()
         
-        # Convert to tensors and move to device
-        audio_features = audio_features.clone().detach().to(dtype=dtype, device=device)
-        audio_feature_lengths = audio_feature_lengths.clone().detach().to(dtype=torch.long, device=device)
+        # Move to device
+        audio_feature = audio_feature.to(device)
+        token_len = torch.tensor([token_ids.shape[1]], dtype=torch.int32).to(device)
         
-        # Step 2: Prepare ASR token inputs (use token_ids as ASR tokens for alignment)
-        asr_token_ids = token_ids
-        asr_token_lengths = torch.tensor([token_ids.shape[1]], dtype=torch.long, device=device)
+        # Use taste_stage1 tokenizer to get TASTE embeddings
+        taste_tokenizer = model.taste_stage1.taste_tokenizer
+        tokenized = taste_tokenizer(token_ids, token_len, audio_feature, audio_feature_len)
+        taste_token_emb = tokenized['taste_token_emb']
         
-        # Step 3: Use audio_tower to encode and quantize audio features
-        # Following the pattern from extract_vq method
-        audio_encoded = model.audio_tower(
-            asr_token_ids=asr_token_ids,
-            asr_token_lengths=asr_token_lengths,
-            audio_features=audio_features,
-            audio_feature_lengths=audio_feature_lengths,
-            asr_word_ids=word_ids,
-        )
-        
-        # Step 4: Extract quantized indices (TASTE tokens)
-        if 'quantized_indices' not in audio_encoded:
-            raise ValueError("Model audio_tower does not have quantization enabled")
-        taste_indices = audio_encoded['quantized_indices']
-
         # Ensure output shape matches input token sequence length
-        if taste_indices.size(1) != token_ids.size(1):
+        if taste_token_emb.size(1) != token_ids.size(1):
             raise ValueError(
-                f"Sequence length mismatch: taste_indices has {taste_indices.size(1)} tokens "
+                f"Sequence length mismatch: taste_token_emb has {taste_token_emb.size(1)} tokens "
                 f"but token_ids has {token_ids.size(1)} tokens. This indicates an alignment "
                 f"problem between audio and text that cannot be automatically corrected."
             )
+        
+        return taste_token_emb
+
+
+def taste_tokenize_with_text_tokens(
+    model: "Taste2ForCausalLM",
+    audio: torch.Tensor,
+    text: Optional[str] = None,
+    asr_model_dir: Optional[str] = None,
+    sampling_rate: int = 16000
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, str]:
+    """
+    Convert audio waveform to TASTE tokens and return both text tokens and TASTE embeddings.
     
-    return taste_indices
+    This is an extended version that returns all tokenization outputs for compatibility
+    with downstream processes that need both text tokens and TASTE embeddings.
+    
+    Args:
+        model: Taste2ForCausalLM model with tokenization capabilities
+        audio: Input audio waveform tensor of shape (1, num_samples)
+        text: Text transcript (optional - will use ASR if not provided)
+        asr_model_dir: ASR model directory for text extraction (optional)
+        sampling_rate: Input audio sampling rate in Hz (will be resampled to 16000 if different)
+    
+    Returns:
+        tuple containing:
+        - text_token_ids: Text token IDs tensor of shape (1, seq_len)
+        - text_token_len: Text token length tensor of shape (1,)
+        - taste_token_embs: TASTE token embeddings of shape (1, seq_len, embed_dim)
+        - asr_text: The transcribed/provided text string
+        
+    Raises:
+        ValueError: If audio has incorrect shape or neither text nor asr_model_dir is provided
+        AssertionError: If batch size is not 1
+    """
+    
+    # Validate inputs
+    if not isinstance(audio, torch.Tensor):
+        raise TypeError("audio must be a torch.Tensor")
+    
+    if audio.ndim != 2:
+        raise ValueError("audio must have shape (1, num_samples)")
+    
+    if text is None and asr_model_dir is None:
+        raise ValueError("Either text or asr_model_dir must be provided")
+    
+    # Ensure batch size is 1
+    assert audio.size(0) == 1, "Batch size must be 1 for audio"
+    
+    # Resample audio to model's expected sampling rate (16000 Hz) if needed
+    target_sr = 16000
+    if sampling_rate != target_sr:
+        resampler = torchaudio.transforms.Resample(orig_freq=sampling_rate, new_freq=target_sr)
+        audio = resampler(audio)
+    
+    # Use TASTE2 model's tokenization process
+    with torch.no_grad():
+        # Get tokenization result from TASTE2 model
+        tokenization_results = list(model.tokenize(
+            audio_16k=audio,
+            text=text,
+            asr_model_dir=asr_model_dir
+        ))
+        
+        if not tokenization_results:
+            raise RuntimeError("TASTE2 tokenization returned no results")
+        
+        # Extract all outputs
+        tokenization_result = tokenization_results[0]
+        
+        return (
+            tokenization_result.text_token_ids,
+            tokenization_result.text_token_len,
+            tokenization_result.taste_token_embs,
+            tokenization_result.asr_text
+        )
