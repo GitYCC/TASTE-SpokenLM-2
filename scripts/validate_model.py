@@ -13,11 +13,6 @@ import torch.distributed as dist
 import deepspeed
 from copy import deepcopy
 
-# Add CosyVoice to Python path
-script_dir = os.path.dirname(os.path.abspath(__file__))
-cosyvoice_root = os.path.join(script_dir, '..', 'CosyVoice')
-sys.path.insert(0, cosyvoice_root)
-
 from hyperpyyaml import load_hyperpyyaml
 from torch.distributed.elastic.multiprocessing.errors import record
 

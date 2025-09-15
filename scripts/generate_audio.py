@@ -7,10 +7,6 @@ import json
 from contextlib import nullcontext
 from hyperpyyaml import load_hyperpyyaml
 
-# Add CosyVoice to Python path
-cosyvoice_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'CosyVoice')
-if cosyvoice_path not in sys.path:
-    sys.path.insert(0, cosyvoice_path)
 from modelscope import snapshot_download
 from huggingface_hub import snapshot_download as hf_snapshot_download
 import torch
