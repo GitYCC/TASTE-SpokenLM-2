@@ -1,0 +1,118 @@
+{
+  "total_files": 9,
+  "successful_files": 9,
+  "failed_files": 0,
+  "stage": "2",
+  "model_dir": "/mnt/shared/NTU_TASLM/yc/models/TASTE2_8B_ZH",
+  "asr_model_dir": "MediaTek-Research/Breeze-ASR-25",
+  "files": [
+    {
+      "original_text": null,
+      "audio_basename": "cont_en_001",
+      "audio_file": "./audio_samples/stage2_EN/cont_en_001.wav",
+      "results": {
+        "stage2": {
+          "audio_path": "./results/stage2/TASTE2_8B_ZH/cont_en_001_stage2_reconstructed.mp3",
+          "asr_text": "The dark mystery of",
+          "generated_text": "The dark mystery of how the body was disposed of as well as what was left at the scene of the crime. So."
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "cont_en_002",
+      "audio_file": "./audio_samples/stage2_EN/cont_en_002.wav",
+      "results": {
+        "stage2": {
+          "audio_path": "./results/stage2/TASTE2_8B_ZH/cont_en_002_stage2_reconstructed.mp3",
+          "asr_text": "I've managed to save some",
+          "generated_text": "I've managed to save some money, but the 200,000 is only a fraction of what I have in my brokerage account."
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "cont_en_003",
+      "audio_file": "./audio_samples/stage2_EN/cont_en_003.wav",
+      "results": {
+        "stage2": {
+          "audio_path": "./results/stage2/TASTE2_8B_ZH/cont_en_003_stage2_reconstructed.mp3",
+          "asr_text": "I reserve your services.",
+          "generated_text": "I reserve your services. You'll help me track down my daughter, who is hiding in a town with many people."
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "cont_en_004",
+      "audio_file": "./audio_samples/stage2_EN/cont_en_004.wav",
+      "results": {
+        "stage2": {
+          "audio_path": "./results/stage2/TASTE2_8B_ZH/cont_en_004_stage2_reconstructed.mp3",
+          "asr_text": "This powder must not",
+          "generated_text": "This powder must not be inhaled, so it's not recommended for this case."
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "cont_en_005",
+      "audio_file": "./audio_samples/stage2_EN/cont_en_005.wav",
+      "results": {
+        "stage2": {
+          "audio_path": "./results/stage2/TASTE2_8B_ZH/cont_en_005_stage2_reconstructed.mp3",
+          "asr_text": "I'll take the armchair.",
+          "generated_text": "I'll take the armchair. I'm gonna make the assumption that he's in the house for whatever reason."
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "hylee_intrainifa_cut",
+      "audio_file": "./audio_samples/stage2_ZH/hylee_intrainifa_cut.m4a",
+      "results": {
+        "stage2": {
+          "audio_path": "./results/stage2/TASTE2_8B_ZH/hylee_intrainifa_cut_stage2_reconstructed.mp3",
+          "asr_text": "然後就沒有然後就硬撐一發就結束了",
+          "generated_text": "然後就沒有然後就硬撐一發就結束了 所以那時候就是"
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "jensen_cut",
+      "audio_file": "./audio_samples/stage2_ZH/jensen_cut.m4a",
+      "results": {
+        "stage2": {
+          "audio_path": "./results/stage2/TASTE2_8B_ZH/jensen_cut_stage2_reconstructed.mp3",
+          "asr_text": "我今天下午去",
+          "generated_text": "我今天下午去公司 跟老闆報告的時候 那個老闆講了一句話 老闆說 你就是那個在看這個 公司的發展"
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "taiwan_area_cut",
+      "audio_file": "./audio_samples/stage2_ZH/taiwan_area_cut.m4a",
+      "results": {
+        "stage2": {
+          "audio_path": "./results/stage2/TASTE2_8B_ZH/taiwan_area_cut_stage2_reconstructed.mp3",
+          "asr_text": "台灣本島的面積",
+          "generated_text": "台灣本島的面積是23.94萬平方公里 臺灣的人口是2359萬人"
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "water_margin_cut",
+      "audio_file": "./audio_samples/stage2_ZH/water_margin_cut.m4a",
+      "results": {
+        "stage2": {
+          "audio_path": "./results/stage2/TASTE2_8B_ZH/water_margin_cut_stage2_reconstructed.mp3",
+          "asr_text": "正途的親屬搶救了半天",
+          "generated_text": "正途的親屬搶救了半天 就這樣錯失了最佳的預防黃金期 只好讓他們在十幾年後開始長期的吸氧與復健 聽到這裡 我想各位應該也會認同 每個人都有生命與時間的限度吧"
+        }
+      }
+    }
+  ]
+}

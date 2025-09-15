@@ -1,0 +1,12 @@
+{
+  "original_text": null,
+  "audio_basename": "taiwan_area_cut",
+  "audio_file": "./audio_samples/stage2_ZH/taiwan_area_cut.m4a",
+  "results": {
+    "stage2": {
+      "audio_path": "./results/stage2/TASTE2_8B_ZH/taiwan_area_cut_stage2_reconstructed.mp3",
+      "asr_text": "台灣本島的面積",
+      "generated_text": "台灣本島的面積是23.94萬平方公里 臺灣的人口是2359萬人"
+    }
+  }
+}

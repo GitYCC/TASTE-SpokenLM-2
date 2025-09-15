@@ -1,0 +1,12 @@
+{
+  "original_text": null,
+  "audio_basename": "cont_en_002",
+  "audio_file": "./audio_samples/stage2_EN/cont_en_002.wav",
+  "results": {
+    "stage2": {
+      "audio_path": "./results/stage2/TASTE2_8B_EN/cont_en_002_stage2_reconstructed.mp3",
+      "asr_text": " I've managed to save some",
+      "generated_text": " I've managed to save some money from my salary, so I bought a car."
+    }
+  }
+}

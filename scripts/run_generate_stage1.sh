@@ -6,8 +6,8 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Configuration
-MODEL_DIR="/mnt/shared/NTU_TASLM/yc/models/TASTE2_8B_ZH"
-OUTPUT_DIR="./results/stage1/TASTE2_ZH/zh"
+MODEL_DIR="/mnt/shared/NTU_TASLM/yc/models/TASTE2_8B_EN"
+OUTPUT_DIR="./results/stage1/TASTE2_EN"
 
 # for en
 ASR_MODEL="openai/whisper-large-v3"

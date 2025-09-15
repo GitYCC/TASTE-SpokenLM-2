@@ -1,0 +1,12 @@
+{
+  "original_text": null,
+  "audio_basename": "cont_en_004",
+  "audio_file": "./audio_samples/stage2_EN/cont_en_004.wav",
+  "results": {
+    "stage2": {
+      "audio_path": "./results/stage2/TASTE2_8B_ZH/cont_en_004_stage2_reconstructed.mp3",
+      "asr_text": "This powder must not",
+      "generated_text": "This powder must not be inhaled, so it's not recommended for this case."
+    }
+  }
+}

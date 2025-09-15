@@ -1,0 +1,12 @@
+{
+  "original_text": null,
+  "audio_basename": "water_margin_cut",
+  "audio_file": "./audio_samples/stage2_ZH/water_margin_cut.m4a",
+  "results": {
+    "stage2": {
+      "audio_path": "./results/stage2/TASTE2_8B_ZH/water_margin_cut_stage2_reconstructed.mp3",
+      "asr_text": "正途的親屬搶救了半天",
+      "generated_text": "正途的親屬搶救了半天 就這樣錯失了最佳的預防黃金期 只好讓他們在十幾年後開始長期的吸氧與復健 聽到這裡 我想各位應該也會認同 每個人都有生命與時間的限度吧"
+    }
+  }
+}

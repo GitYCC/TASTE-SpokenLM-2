@@ -7,11 +7,7 @@ as 'taste_stage1' key and save the updated file.
 import torch
 import os
 
-def copy_llm_weights():
-    source_path = "/mnt/shared/NTU_TASLM/yc/models/taste2_8B_finalfinal/llm.pt"
-    dest_path = "/mnt/shared/NTU_TASLM/yc/TASTE-SpokenLM-2/training/exp/taste2_stage2_8B_lora_better/epoch_0_step_60000_filtered.pt"
-    output_path = "/mnt/shared/NTU_TASLM/yc/models/taste2_8B_finalfinal/slm_initialized.pt"
-    
+def copy_llm_weights(source_path, dest_path, output_path):
     print(f"Loading source model from: {source_path}")
     if not os.path.exists(source_path):
         raise FileNotFoundError(f"Source file not found: {source_path}")
@@ -40,4 +36,8 @@ def copy_llm_weights():
     print("Successfully saved updated model to new file")
 
 if __name__ == "__main__":
-    copy_llm_weights()
+    source_path = "/mnt/shared/NTU_TASLM/yc/models/TASTE2_8B_ZH/llm.pt"
+    dest_path = "/mnt/shared/NTU_TASLM/yc/models/TASTE2_8B_EN/slm.pt"
+    output_path = "/mnt/shared/NTU_TASLM/yc/models/TASTE2_8B_ZH/slm_initialized.pt"
+
+    copy_llm_weights(source_path, dest_path, output_path)

@@ -328,7 +328,7 @@ class TASTE2:
         }
 
     @torch.inference_mode()
-    def generation_stage2(self, audio_16k, asr_model_dir=None, text=None):
+    def generation_stage2(self, audio_16k, asr_model_dir=None, text=None, min_len=5, max_len=100):
         """Generate stage 2 output"""
         if self.stage != 2:
             raise ValueError("generation_stage2 can only be called on stage 2 model")
@@ -340,8 +340,8 @@ class TASTE2:
         
         slm_output_generator = self.model.slm.inference(
             **data,
-            min_len=3,
-            max_len=20,
+            min_len=min_len,
+            max_len=max_len,
             sampling=25,
         )
         

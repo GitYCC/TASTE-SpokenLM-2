@@ -6,18 +6,25 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Configuration
-MODEL_DIR="/mnt/shared/NTU_TASLM/models/taste2_8B_final"
-OUTPUT_DIR="./results/stage2/taste2_8B_final"
+MODEL_DIR="/mnt/shared/NTU_TASLM/yc/models/TASTE2_8B_EN"
+OUTPUT_DIR="./results/stage2/TASTE2_8B_EN"
+# for en
 ASR_MODEL="openai/whisper-large-v3"
+# for zh
+# ASR_MODEL="MediaTek-Research/Breeze-ASR-25"
 
 # Test files
 TEST_FILES=(
-    "/mnt/shared/NTU_TASLM/yc/TASTE-SpokenLM/examples/orig/conditional/cond-gen_1188_133604_000062_000001_cond.wav"
-    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/ex01_happy_00209.wav"
-    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/ex04_sad_00311.wav"
-    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/004.wav"
-    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/012.wav"
-    # "/mnt/shared/NTU_TASLM/dienruei/data/emilia-en/data/test/emilia-dataset-train-02207-of-04908-taste.arrow"
+    "./audio_samples/stage2_EN/cont_en_001.wav"
+    "./audio_samples/stage2_EN/cont_en_002.wav"
+    "./audio_samples/stage2_EN/cont_en_003.wav"
+    "./audio_samples/stage2_EN/cont_en_004.wav"
+    "./audio_samples/stage2_EN/cont_en_005.wav"
+    # for zh
+    # "./audio_samples/stage2_ZH/hylee_intrainifa_cut.m4a"
+    # "./audio_samples/stage2_ZH/jensen_cut.m4a"
+    # "./audio_samples/stage2_ZH/taiwan_area_cut.m4a"
+    # "./audio_samples/stage2_ZH/water_margin_cut.m4a"
 )
 
 echo "Running TASTE2 Stage 2 Audio Generation..."

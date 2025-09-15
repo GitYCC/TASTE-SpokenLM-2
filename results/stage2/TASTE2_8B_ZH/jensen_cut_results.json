@@ -1,0 +1,12 @@
+{
+  "original_text": null,
+  "audio_basename": "jensen_cut",
+  "audio_file": "./audio_samples/stage2_ZH/jensen_cut.m4a",
+  "results": {
+    "stage2": {
+      "audio_path": "./results/stage2/TASTE2_8B_ZH/jensen_cut_stage2_reconstructed.mp3",
+      "asr_text": "我今天下午去",
+      "generated_text": "我今天下午去公司 跟老闆報告的時候 那個老闆講了一句話 老闆說 你就是那個在看這個 公司的發展"
+    }
+  }
+}
