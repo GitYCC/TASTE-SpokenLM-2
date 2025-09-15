@@ -1,0 +1,11 @@
+{
+  "original_text": null,
+  "audio_basename": "taiwan_area",
+  "audio_file": "./audio_samples/stage1_ZH/taiwan_area.wav",
+  "results": {
+    "stage1": {
+      "audio_path": "./results/stage1/TASTE2_ZH/zh/taiwan_area_stage1_reconstructed.mp3",
+      "asr_text": "台灣本島的面積為 35 873 平方公里如果包括台灣本島及金門馬祖蘭嶼綠島釣魚島等 21 個附屬島嶼再加上澎湖列島 64 個島嶼的話總面積就是 36 188 平方公里"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "original_text": null,
+  "audio_basename": "hylee_intrainifa",
+  "audio_file": "./audio_samples/stage1_ZH/hylee_intrainifa.wav",
+  "results": {
+    "stage1": {
+      "audio_path": "./results/stage1/TASTE2_ZH/zh/hylee_intrainifa_stage1_reconstructed.mp3",
+      "asr_text": "這邊舉的例子呢是語音合成那今天語音合成你完全可以就是訓練一個 seq2seq 的 modelseq2seq 的 model 大家都很熟嘛 transformer 就是一個例子你就拿出來然後輸入是什麼你就蒐集很多的聲音文字跟聲音訊號的對應關係蒐集很多的文字跟聲音訊號的對應關係告訴你的然後接下來告訴你的 seq2seq model 說看到這段中文的句子你就輸出這段聲音然後就沒有然後就硬吹一發就結束了"
+    }
+  }
+}

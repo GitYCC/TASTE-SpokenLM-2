@@ -1,0 +1,11 @@
+{
+  "original_text": null,
+  "audio_basename": "sometime",
+  "audio_file": "./audio_samples/stage1_ZH/sometime.mp3",
+  "results": {
+    "stage1": {
+      "audio_path": "./results/stage1/TASTE2_ZH/zh/sometime_stage1_reconstructed.mp3",
+      "asr_text": "你有時候可能會來五天整你有時候可能大概四天就結束可是你有時候可能來一個禮拜我不確定要講幾天"
+    }
+  }
+}

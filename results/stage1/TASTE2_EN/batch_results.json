@@ -1,0 +1,98 @@
+{
+  "total_files": 8,
+  "successful_files": 8,
+  "failed_files": 0,
+  "stage": "1",
+  "model_dir": "/mnt/shared/NTU_TASLM/yc/models/TASTE2_2B_EN",
+  "asr_model_dir": "openai/whisper-large-v3",
+  "files": [
+    {
+      "original_text": null,
+      "audio_basename": "121-127105-0007",
+      "audio_file": "./audio_samples/stage1_EN/121-127105-0007.flac",
+      "results": {
+        "stage1": {
+          "audio_path": "./results/stage1/TASTE2_2B_EN/121-127105-0007_stage1_reconstructed.mp3",
+          "asr_text": " To this his answer was prompt, Oh, thank God, no. And is the record yours?"
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "1995-1837-0007",
+      "audio_file": "./audio_samples/stage1_EN/1995-1837-0007.flac",
+      "results": {
+        "stage1": {
+          "audio_path": "./results/stage1/TASTE2_2B_EN/1995-1837-0007_stage1_reconstructed.mp3",
+          "asr_text": " Then of a sudden at midday the sun shot out, hot and still. No breath of air stirred. The sky was like blue steel. The earth steamed."
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "2830-3980-0032",
+      "audio_file": "./audio_samples/stage1_EN/2830-3980-0032.flac",
+      "results": {
+        "stage1": {
+          "audio_path": "./results/stage1/TASTE2_2B_EN/2830-3980-0032_stage1_reconstructed.mp3",
+          "asr_text": " We look for that reward which eye hath not seen, nor ear heard, neither hath entered into the heart of man."
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "4446-2273-0032",
+      "audio_file": "./audio_samples/stage1_EN/4446-2273-0032.flac",
+      "results": {
+        "stage1": {
+          "audio_path": "./results/stage1/TASTE2_2B_EN/4446-2273-0032_stage1_reconstructed.mp3",
+          "asr_text": " He stood a little behind her and tried to steady himself as he said, It's soft and misty. See how white the stars are."
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "8224-274384-0000",
+      "audio_file": "./audio_samples/stage1_EN/8224-274384-0000.flac",
+      "results": {
+        "stage1": {
+          "audio_path": "./results/stage1/TASTE2_2B_EN/8224-274384-0000_stage1_reconstructed.mp3",
+          "asr_text": " He passed through Henley, St Albans, and came so near to London as Harrow-on-the-Hill."
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "ex01_happy_00209",
+      "audio_file": "./audio_samples/stage1_EN/ex01_happy_00209.wav",
+      "results": {
+        "stage1": {
+          "audio_path": "./results/stage1/TASTE2_2B_EN/ex01_happy_00209_stage1_reconstructed.mp3",
+          "asr_text": " I love the movie Bend It Like Beckham."
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "ex04_00350_sad_happy",
+      "audio_file": "./audio_samples/stage1_EN/ex04_00350_sad_happy.wav",
+      "results": {
+        "stage1": {
+          "audio_path": "./results/stage1/TASTE2_2B_EN/ex04_00350_sad_happy_stage1_reconstructed.mp3",
+          "asr_text": " Pride and Prejudice was another huge hit from her. Pride and Prejudice was another huge hit from her."
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "ex04_sad_00311",
+      "audio_file": "./audio_samples/stage1_EN/ex04_sad_00311.wav",
+      "results": {
+        "stage1": {
+          "audio_path": "./results/stage1/TASTE2_2B_EN/ex04_sad_00311_stage1_reconstructed.mp3",
+          "asr_text": " Tomorrow in Laguna Beach, there's no chance it'll rain."
+        }
+      }
+    }
+  ]
+}

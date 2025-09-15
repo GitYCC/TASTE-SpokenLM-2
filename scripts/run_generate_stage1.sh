@@ -6,17 +6,30 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Configuration
-MODEL_DIR="/mnt/shared/NTU_TASLM/models/taste2_8B_final"
-OUTPUT_DIR="./results/stage1/taste2_8B_final"
+MODEL_DIR="/mnt/shared/NTU_TASLM/yc/models/TASTE2_8B_ZH"
+OUTPUT_DIR="./results/stage1/TASTE2_ZH/zh"
+
+# for en
 ASR_MODEL="openai/whisper-large-v3"
+# for zh
+# ASR_MODEL="MediaTek-Research/Breeze-ASR-25"
 
 # Test files
 TEST_FILES=(
-    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/ex01_happy_00209.wav"
-    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/ex04_sad_00311.wav"
-    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/001.wav"
-    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/004.wav"
-    "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/012.wav"
+    "./audio_samples/stage1_EN/121-127105-0007.flac"
+    "./audio_samples/stage1_EN/1995-1837-0007.flac"
+    "./audio_samples/stage1_EN/2830-3980-0032.flac"
+    "./audio_samples/stage1_EN/4446-2273-0032.flac"
+    "./audio_samples/stage1_EN/8224-274384-0000.flac"
+    "./audio_samples/stage1_EN/ex01_happy_00209.wav"
+    "./audio_samples/stage1_EN/ex04_00350_sad_happy.wav"
+    "./audio_samples/stage1_EN/ex04_sad_00311.wav"
+    # for zh
+    # "./audio_samples/stage1_ZH/hylee_intrainifa.wav"
+    # "./audio_samples/stage1_ZH/jensen.m4a"
+    # "./audio_samples/stage1_ZH/sometime.mp3"
+    # "./audio_samples/stage1_ZH/taiwan_area.wav"
+    # "./audio_samples/stage1_ZH/water_margin.wav"
 )
 
 echo "Running TASTE2 Stage 1 Audio Generation..."

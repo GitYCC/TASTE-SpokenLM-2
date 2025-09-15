@@ -1,0 +1,11 @@
+{
+  "original_text": null,
+  "audio_basename": "8224-274384-0000",
+  "audio_file": "./audio_samples/stage1_EN/8224-274384-0000.flac",
+  "results": {
+    "stage1": {
+      "audio_path": "./results/stage1/TASTE2_ZH/en/8224-274384-0000_stage1_reconstructed.mp3",
+      "asr_text": " He passed through Henley, St Albans, and came so near to London as Harrow-on-the-Hill."
+    }
+  }
+}
