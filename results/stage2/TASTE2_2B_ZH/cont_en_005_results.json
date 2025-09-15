@@ -1,0 +1,12 @@
+{
+  "original_text": null,
+  "audio_basename": "cont_en_005",
+  "audio_file": "./audio_samples/stage2_EN/cont_en_005.wav",
+  "results": {
+    "stage2": {
+      "audio_path": "./results/stage2/TASTE2_2B_ZH/cont_en_005_stage2_reconstructed.mp3",
+      "asr_text": "I'll take the armchair.",
+      "generated_text": "I'll take the armchair. And for those of you that are wondering,"
+    }
+  }
+}

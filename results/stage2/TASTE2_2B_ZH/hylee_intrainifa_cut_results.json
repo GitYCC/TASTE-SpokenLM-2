@@ -1,0 +1,12 @@
+{
+  "original_text": null,
+  "audio_basename": "hylee_intrainifa_cut",
+  "audio_file": "./audio_samples/stage2_ZH/hylee_intrainifa_cut.m4a",
+  "results": {
+    "stage2": {
+      "audio_path": "./results/stage2/TASTE2_2B_ZH/hylee_intrainifa_cut_stage2_reconstructed.mp3",
+      "asr_text": "然後就沒有然後就硬撐一發就結束了",
+      "generated_text": "然後就沒有然後就硬撐一發就結束了這樣子 對 所以你要學會怎麼去 做決定 然後去讓自己 對於你的決定有一個回應的感覺"
+    }
+  }
+}

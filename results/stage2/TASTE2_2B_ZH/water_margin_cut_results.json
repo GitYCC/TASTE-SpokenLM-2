@@ -1,0 +1,12 @@
+{
+  "original_text": null,
+  "audio_basename": "water_margin_cut",
+  "audio_file": "./audio_samples/stage2_ZH/water_margin_cut.m4a",
+  "results": {
+    "stage2": {
+      "audio_path": "./results/stage2/TASTE2_2B_ZH/water_margin_cut_stage2_reconstructed.mp3",
+      "asr_text": "正途的親屬搶救了半天",
+      "generated_text": "正途的親屬搶救了半天 也沒有救了 他的女兒"
+    }
+  }
+}

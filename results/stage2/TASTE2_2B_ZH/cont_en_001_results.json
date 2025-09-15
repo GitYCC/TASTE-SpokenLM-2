@@ -1,0 +1,12 @@
+{
+  "original_text": null,
+  "audio_basename": "cont_en_001",
+  "audio_file": "./audio_samples/stage2_EN/cont_en_001.wav",
+  "results": {
+    "stage2": {
+      "audio_path": "./results/stage2/TASTE2_2B_ZH/cont_en_001_stage2_reconstructed.mp3",
+      "asr_text": "The dark mystery of",
+      "generated_text": "The dark mystery of how the world works and the complexity of every human being is more important than any amount of money ever given to you. The real power is in your ability to look at the world and ask, why does this make no sense? What's wrong here?"
+    }
+  }
+}

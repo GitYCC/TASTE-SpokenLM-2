@@ -1,0 +1,12 @@
+{
+  "original_text": null,
+  "audio_basename": "jensen_cut",
+  "audio_file": "./audio_samples/stage2_ZH/jensen_cut.m4a",
+  "results": {
+    "stage2": {
+      "audio_path": "./results/stage2/TASTE2_2B_ZH/jensen_cut_stage2_reconstructed.mp3",
+      "asr_text": "我今天下午去",
+      "generated_text": "我今天下午去逛臺南的一個大廳 它的內部的一個設計"
+    }
+  }
+}

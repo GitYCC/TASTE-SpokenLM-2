@@ -1,0 +1,12 @@
+{
+  "original_text": null,
+  "audio_basename": "cont_en_001",
+  "audio_file": "./audio_samples/stage2_EN/cont_en_001.wav",
+  "results": {
+    "stage2": {
+      "audio_path": "./results/stage2/TASTE2_2B_EN/cont_en_001_stage2_reconstructed.mp3",
+      "asr_text": " The dark mystery of",
+      "generated_text": " The dark mystery of the forest was revealed to me now. It seemed to me that I was a tiny insect."
+    }
+  }
+}

@@ -1,0 +1,118 @@
+{
+  "total_files": 9,
+  "successful_files": 9,
+  "failed_files": 0,
+  "stage": "2",
+  "model_dir": "/mnt/shared/NTU_TASLM/yc/models/TASTE2_2B_ZH",
+  "asr_model_dir": "MediaTek-Research/Breeze-ASR-25",
+  "files": [
+    {
+      "original_text": null,
+      "audio_basename": "cont_en_001",
+      "audio_file": "./audio_samples/stage2_EN/cont_en_001.wav",
+      "results": {
+        "stage2": {
+          "audio_path": "./results/stage2/TASTE2_2B_ZH/cont_en_001_stage2_reconstructed.mp3",
+          "asr_text": "The dark mystery of",
+          "generated_text": "The dark mystery of how the world works and the complexity of every human being is more important than any amount of money ever given to you. The real power is in your ability to look at the world and ask, why does this make no sense? What's wrong here?"
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "cont_en_002",
+      "audio_file": "./audio_samples/stage2_EN/cont_en_002.wav",
+      "results": {
+        "stage2": {
+          "audio_path": "./results/stage2/TASTE2_2B_ZH/cont_en_002_stage2_reconstructed.mp3",
+          "asr_text": "I've managed to save some",
+          "generated_text": "I've managed to save some of it for what we're calling day one."
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "cont_en_003",
+      "audio_file": "./audio_samples/stage2_EN/cont_en_003.wav",
+      "results": {
+        "stage2": {
+          "audio_path": "./results/stage2/TASTE2_2B_ZH/cont_en_003_stage2_reconstructed.mp3",
+          "asr_text": "I reserve your services.",
+          "generated_text": "I reserve your services. I've got to get going, huh? I'll be back in a moment."
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "cont_en_004",
+      "audio_file": "./audio_samples/stage2_EN/cont_en_004.wav",
+      "results": {
+        "stage2": {
+          "audio_path": "./results/stage2/TASTE2_2B_ZH/cont_en_004_stage2_reconstructed.mp3",
+          "asr_text": "This powder must not",
+          "generated_text": "This powder must not be exposed to the sunshine for too long, as the pigment will disappear."
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "cont_en_005",
+      "audio_file": "./audio_samples/stage2_EN/cont_en_005.wav",
+      "results": {
+        "stage2": {
+          "audio_path": "./results/stage2/TASTE2_2B_ZH/cont_en_005_stage2_reconstructed.mp3",
+          "asr_text": "I'll take the armchair.",
+          "generated_text": "I'll take the armchair. And for those of you that are wondering,"
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "hylee_intrainifa_cut",
+      "audio_file": "./audio_samples/stage2_ZH/hylee_intrainifa_cut.m4a",
+      "results": {
+        "stage2": {
+          "audio_path": "./results/stage2/TASTE2_2B_ZH/hylee_intrainifa_cut_stage2_reconstructed.mp3",
+          "asr_text": "然後就沒有然後就硬撐一發就結束了",
+          "generated_text": "然後就沒有然後就硬撐一發就結束了這樣子 對 所以你要學會怎麼去 做決定 然後去讓自己 對於你的決定有一個回應的感覺"
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "jensen_cut",
+      "audio_file": "./audio_samples/stage2_ZH/jensen_cut.m4a",
+      "results": {
+        "stage2": {
+          "audio_path": "./results/stage2/TASTE2_2B_ZH/jensen_cut_stage2_reconstructed.mp3",
+          "asr_text": "我今天下午去",
+          "generated_text": "我今天下午去逛臺南的一個大廳 它的內部的一個設計"
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "taiwan_area_cut",
+      "audio_file": "./audio_samples/stage2_ZH/taiwan_area_cut.m4a",
+      "results": {
+        "stage2": {
+          "audio_path": "./results/stage2/TASTE2_2B_ZH/taiwan_area_cut_stage2_reconstructed.mp3",
+          "asr_text": "台灣本島的面積",
+          "generated_text": "台灣本島的面積 有多少呢"
+        }
+      }
+    },
+    {
+      "original_text": null,
+      "audio_basename": "water_margin_cut",
+      "audio_file": "./audio_samples/stage2_ZH/water_margin_cut.m4a",
+      "results": {
+        "stage2": {
+          "audio_path": "./results/stage2/TASTE2_2B_ZH/water_margin_cut_stage2_reconstructed.mp3",
+          "asr_text": "正途的親屬搶救了半天",
+          "generated_text": "正途的親屬搶救了半天 也沒有救了 他的女兒"
+        }
+      }
+    }
+  ]
+}
