@@ -186,7 +186,15 @@ class TASTE2:
             raise ValueError(f'{hyper_yaml_path} not found!')
         
         with open(hyper_yaml_path, 'r') as f:
-            configs = load_hyperpyyaml(f, overrides={'qwen_pretrain_path': os.path.join(model_dir, 'CosyVoice-BlankEN')})
+            configs = load_hyperpyyaml(
+                f, 
+                overrides={
+                    'qwen_pretrain_path': os.path.join(model_dir, 'CosyVoice-BlankEN'),
+                    'taste_tokenizer_backbond_path': os.path.join(model_dir, 'distil-whisper'),
+                    'qwen_pretrain_path_for_slm': os.path.join(model_dir, 'qwen2-1_5b'),
+                    'qwen_pretrain_path_for_slm_7b': os.path.join(model_dir, 'qwen2-7b'),
+                }
+            )
 
         # Initialize frontend and extractors
         self.frontend = CosyVoiceFrontEnd(
