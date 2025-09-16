@@ -168,7 +168,7 @@ class WhisperAudioEncoderForJoint(BaseAudioEncoder):
                 input_features = F.pad(input_features, p1d, 'constant', 0.0)
             else:
                 raise ValueError(
-                    f"Whisper expects the mel input features to be of length {expected_seq_length}, but found {input_features.shape[-1]}. Make sure to pad the input mel features to {expected_seq_length}."
+                    f"Whisper expects the mel input features to be of length {self.expected_seq_length}, but found {input_features.shape[-1]}. Make sure to pad the input mel features to {self.expected_seq_length}."
                 )
 
         inputs_embeds = nn.functional.gelu(self.encoder.conv1(input_features))
