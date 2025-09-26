@@ -17,6 +17,7 @@ from torch.nn import functional as F
 from taste_speech.taste2.cosyvoice.cli.frontend import CosyVoiceFrontEnd
 from taste_speech.taste2.cosyvoice.utils.file_utils import logging
 from taste_speech.taste2.cosyvoice.utils.common import fade_in_out
+from taste_speech.taste2.taste2_interface import TASTE2Model
 
 def print_green(text):
     """Print text in green color"""
@@ -63,186 +64,22 @@ def load_audio_data(test_file, output_dir):
     
     return audio_16k, ground_truth_text, audio_basename
 
-class TASTE2Model:
-    """Unified TASTE2 Model for both Stage 1 and Stage 2 audio reconstruction"""
-    
-    def __init__(self, llm, flow, hift, slm=None, fp16=False):
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.llm, self.flow, self.hift = llm, flow, hift
-        self.slm = slm  # Optional SLM for Stage 2
-        self.fp16 = fp16
-        
-        if fp16:
-            self.llm.half()
-            self.flow.half()
-        
-        # Cache and streaming parameters
-        self.token_hop_len = 25
-        self.mel_cache_len = 8
-        self.source_cache_len = self.mel_cache_len * 480
-        self.speech_window = np.hamming(2 * self.source_cache_len)
-        self.llm_context = torch.cuda.stream(torch.cuda.Stream(self.device)) if torch.cuda.is_available() else nullcontext()
-        self.lock = threading.Lock()
-        self.session_data = {}
-    
-    def load(self, llm_model, flow_model, hift_model, slm_model=None):
-        """Load model weights"""
-        self.llm.load_state_dict(torch.load(llm_model, map_location=self.device), strict=True)
-        self.llm.to(self.device).eval()
-        self.flow.load_state_dict(torch.load(flow_model, map_location=self.device), strict=True)
-        self.flow.to(self.device).eval()
-        # in case hift_model is a hifigan model
-        hift_state_dict = {k.replace('generator.', ''): v for k, v in torch.load(hift_model, map_location=self.device).items()}
-        self.hift.load_state_dict(hift_state_dict, strict=True)
-        self.hift.to(self.device).eval()
-        if slm_model is not None:
-            self.slm.load_state_dict(torch.load(slm_model, map_location=self.device), strict=True)
-            self.slm.to(self.device).eval()
-    
-    def _run_inference_job(self, source_token, session_id, **kwargs):
-        """Unified inference job for both LLM and VC"""
-        if source_token.shape[1] == 0:  # LLM job
-            with self.llm_context, torch.cuda.amp.autocast(self.fp16 and not hasattr(self.llm, 'vllm')):
-                for token in self.llm.inference(**{k: v.to(self.device) if hasattr(v, 'to') else v for k, v in kwargs.items()}, uuid=session_id):
-                    self.session_data[session_id]['tokens'].append(token)
-        else:  # VC job
-            self.session_data[session_id]['tokens'] = source_token.flatten().tolist()
-        self.session_data[session_id]['finished'] = True
-    
-    def token2wav(self, token, prompt_token, prompt_feat, embedding, session_id, token_offset=0, finalize=True, speed=1.0):
-        """Convert tokens to waveform"""
-        with torch.cuda.amp.autocast(self.fp16):
-            tts_mel, _ = self.flow.inference(
-                token=token.to(self.device),
-                token_len=torch.tensor([token.shape[1]], dtype=torch.int32).to(self.device),
-                prompt_token=prompt_token.to(self.device),
-                prompt_token_len=torch.tensor([prompt_token.shape[1]], dtype=torch.int32).to(self.device),
-                prompt_feat=prompt_feat.to(self.device),
-                prompt_feat_len=torch.tensor([prompt_feat.shape[1]], dtype=torch.int32).to(self.device),
-                embedding=embedding.to(self.device),
-                streaming=False,
-                finalize=finalize
-            )
-        
-        if speed != 1.0 and finalize:
-            tts_mel = F.interpolate(tts_mel, size=int(tts_mel.shape[2] / speed), mode='linear')
-        
-        tts_speech, _ = self.hift.inference(speech_feat=tts_mel, cache_source=torch.zeros(1, 1, 0))
-        return tts_speech
-    
-    def tts(self, source_speech_token=torch.zeros(1, 0, dtype=torch.int32), flow_embedding=torch.zeros(0, 192), speed=1.0, **kwargs):
-        """Simplified TTS generation for reconstruction"""
-        session_id = str(uuid.uuid1())
-        
-        with self.lock:
-            self.session_data[session_id] = {'tokens': [], 'finished': False}
-        
-        # Run inference job
-        job_kwargs = {k: v for k, v in kwargs.items() if k in ['text', 'prompt_text', 'llm_prompt_speech_token', 'llm_embedding']}
-        thread = threading.Thread(target=self._run_inference_job, args=(source_speech_token, session_id), kwargs=job_kwargs)
-        thread.start()
-        thread.join()
-        
-        # Convert tokens to audio
-        tokens = torch.tensor(self.session_data[session_id]['tokens']).unsqueeze(0)
-        speech = self.token2wav(
-            token=tokens,
-            prompt_token=kwargs.get('flow_prompt_speech_token', torch.zeros(1, 0, dtype=torch.int32)),
-            prompt_feat=kwargs.get('prompt_speech_feat', torch.zeros(1, 0, 80)),
-            embedding=flow_embedding,
-            session_id=session_id,
-            speed=speed
-        )
-        
-        # Cleanup
-        with self.lock:
-            self.session_data.pop(session_id)
-        
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        
-        yield {'tts_speech': speech.cpu()}
 
 class TASTE2:
     """Unified TASTE2 class for both Stage 1 and Stage 2 audio reconstruction"""
     
     def __init__(self, model_dir, stage=1, load_jit=False, load_trt=False, load_vllm=False, fp16=False, trt_concurrent=1):
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.model_dir = model_dir
-        self.fp16 = fp16
-        self.stage = stage
-        
-        # Download model if needed
-        if not os.path.exists(model_dir):
-            if stage == 1:
-                model_dir = snapshot_download(model_dir)
-            else:
-                model_dir = hf_snapshot_download(model_dir)
-        
-        # Load appropriate config file
-        config_file = f'taste2_stage{stage}.yaml'
-        hyper_yaml_path = os.path.join(model_dir, config_file)
-        if not os.path.exists(hyper_yaml_path):
-            raise ValueError(f'{hyper_yaml_path} not found!')
-        
-        with open(hyper_yaml_path, 'r') as f:
-            configs = load_hyperpyyaml(
-                f, 
-                overrides={
-                    'qwen_pretrain_path': os.path.join(model_dir, 'CosyVoice-BlankEN'),
-                    'taste_tokenizer_backbond_path': os.path.join(model_dir, 'distil-whisper'),
-                    'qwen_pretrain_path_for_slm': os.path.join(model_dir, 'qwen2-1_5b'),
-                    'qwen_pretrain_path_for_slm_7b': os.path.join(model_dir, 'qwen2-7b'),
-                }
-            )
+        # Simply instantiate the complete TASTE2Model
+        self.model = TASTE2Model(model_dir, stage, load_jit, load_trt, load_vllm, fp16, trt_concurrent)
 
-        # Initialize frontend and extractors
-        self.frontend = CosyVoiceFrontEnd(
-            configs['get_tokenizer'],
-            configs['feat_extractor'],
-            os.path.join(model_dir, 'campplus.onnx'),
-            os.path.join(model_dir, 'speech_tokenizer_v2.onnx'),
-            os.path.join(model_dir, 'spk2info.pt'),
-            configs['allowed_special']
-        )
-        self.audio_extractor = configs['audio_extractor']
-        self.sample_rate = configs['sample_rate']
-        
-        # Handle CUDA availability
-        if not torch.cuda.is_available() and (load_jit or load_trt or fp16):
-            load_jit, load_trt, fp16 = False, False, False
-            logging.warning('no cuda device, set load_jit/load_trt/fp16 to False')
-        
-        # Initialize model based on stage
-        slm = configs.get('slm') if stage == 2 or stage == "sft" else None
-        self.model = TASTE2Model(configs['llm'], configs['flow'], configs['hift'], slm, fp16)
-        
-        # Load model weights
-        self.model.load(
-            os.path.join(model_dir, 'llm.pt'),
-            os.path.join(model_dir, 'flow.pt'),
-            os.path.join(model_dir, 'hift.pt'),
-            os.path.join(model_dir, 'slm.pt') if stage == 2 or stage == "sft" else None
-        )
-        
-        # Optional optimizations
-        if load_vllm:
-            self.model.load_vllm(os.path.join(model_dir, 'vllm'))
-        if load_jit:
-            precision = 'fp16' if fp16 else 'fp32'
-            self.model.load_jit(os.path.join(model_dir, f'flow.encoder.{precision}.zip'))
-        if load_trt:
-            precision = 'fp16' if fp16 else 'fp32'
-            self.model.load_trt(
-                os.path.join(model_dir, f'flow.decoder.estimator.{precision}.mygpu.plan'),
-                os.path.join(model_dir, 'flow.decoder.estimator.fp32.onnx'),
-                trt_concurrent,
-                fp16
-            )
-
-        self.taste_stage1 = self.model.slm.taste_stage1 if stage == 2 or stage == "sft" else self.model.llm
-        
-        del configs
+        # Expose common references for backward compatibility
+        self.device = self.model.device
+        self.frontend = self.model.frontend
+        self.audio_extractor = self.model.audio_extractor
+        self.sample_rate = self.model.sample_rate
+        self.taste_stage1 = self.model.taste_stage1
+        self.stage = self.model.stage
+        self.fp16 = self.model.fp16
 
     def _run_asr(self, audio_16k, asr_model_dir="openai/whisper-large-v3"):
         """Run ASR on audio to get text transcription"""
