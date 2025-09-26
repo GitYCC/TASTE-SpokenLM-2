@@ -29,7 +29,11 @@ mkdir -p "$OUTPUT_DIR"
 
 # Run batch processing with all files at once
 echo "Starting batch processing..."
+<<<<<<< HEAD
 /opt/conda/envs/cosyvoice/bin/python "$SCRIPT_DIR/generate_audio.py" \
+=======
+python "$SCRIPT_DIR/generate_audio.py" \
+>>>>>>> 5f748867d9e5c3038de11bced3846f03c680c987
     --model_dir "$MODEL_DIR" \
     --output_dir "$OUTPUT_DIR" \
     --test_files "${TEST_FILES[@]}" \
