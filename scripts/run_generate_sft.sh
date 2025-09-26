@@ -6,13 +6,13 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Configuration
-MODEL_DIR="/mnt/shared/NTU_TASLM/models/TASTE2_8B_EN_sft"
+MODEL_DIR="/home/chenwils/TASTE-SpokenLM-2/TASTE2_SFT"
 OUTPUT_DIR="./results/sft/test"
 ASR_MODEL="openai/whisper-large-v3"
 
 # Test files
 TEST_FILES=(
-    "/mnt/shared/NTU_TASLM/dienruei/synthetic_data/tmp_parquet_output/dialogue_2_scenario32_17_turn_02_user.mp3"
+    "/home/chenwils/synthetic_data/tmp_parquet_output/dialogue_1_scenario40_16_turn_02_user.mp3"
     # "/mnt/shared/NTU_TASLM/yc/TASTE-SpokenLM/examples/orig/conditional/cond-gen_1188_133604_000062_000001_cond.wav"
     # "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/ex01_happy_00209.wav"
     # "/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/ex04_sad_00311.wav"
@@ -29,7 +29,7 @@ mkdir -p "$OUTPUT_DIR"
 
 # Run batch processing with all files at once
 echo "Starting batch processing..."
-python "$SCRIPT_DIR/generate_audio.py" \
+/opt/conda/envs/cosyvoice/bin/python "$SCRIPT_DIR/generate_audio.py" \
     --model_dir "$MODEL_DIR" \
     --output_dir "$OUTPUT_DIR" \
     --test_files "${TEST_FILES[@]}" \

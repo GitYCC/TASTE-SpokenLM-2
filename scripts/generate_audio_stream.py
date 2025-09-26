@@ -171,22 +171,35 @@ class TASTE2:
         self.model_dir = model_dir
         self.fp16 = fp16
         self.stage = stage
-        
+
         # Download model if needed
         if not os.path.exists(model_dir):
             if stage == 1:
                 model_dir = snapshot_download(model_dir)
+            elif stage == 'sft':
+                model_dir = hf_snapshot_download(model_dir)
             else:
                 model_dir = hf_snapshot_download(model_dir)
-        
+
         # Load appropriate config file
-        config_file = f'taste2_stage{stage}.yaml'
+        if stage == 'sft':
+            config_file = 'taste2_stagesft.yaml'
+        else:
+            config_file = f'taste2_stage{stage}.yaml'
         hyper_yaml_path = os.path.join(model_dir, config_file)
         if not os.path.exists(hyper_yaml_path):
             raise ValueError(f'{hyper_yaml_path} not found!')
         
         with open(hyper_yaml_path, 'r') as f:
-            configs = load_hyperpyyaml(f, overrides={'qwen_pretrain_path': os.path.join(model_dir, 'CosyVoice-BlankEN')})
+            configs = load_hyperpyyaml(
+                f,
+                overrides={
+                    'qwen_pretrain_path': os.path.join(model_dir, 'CosyVoice-BlankEN'),
+                    'taste_tokenizer_backbond_path': os.path.join(model_dir, 'distil-whisper'),
+                    'qwen_pretrain_path_for_slm': os.path.join(model_dir, 'qwen2-1_5b'),
+                    'qwen_pretrain_path_for_slm_7b': os.path.join(model_dir, 'qwen2-7b'),
+                }
+            )
 
         # Initialize frontend and extractors
         self.frontend = CosyVoiceFrontEnd(
@@ -206,16 +219,24 @@ class TASTE2:
             logging.warning('no cuda device, set load_jit/load_trt/fp16 to False')
         
         # Initialize model based on stage
-        slm = configs.get('slm') if stage == 2 else None
+        slm = configs.get('slm') if stage in [2, 'sft'] else None
         self.model = TASTE2Model(configs['llm'], configs['flow'], configs['hift'], slm, fp16)
-        
+
         # Load model weights
-        self.model.load(
-            os.path.join(model_dir, 'llm.pt'),
-            os.path.join(model_dir, 'flow.pt'),
-            os.path.join(model_dir, 'hift.pt'),
-            os.path.join(model_dir, 'slm.pt') if stage == 2 else None
-        )
+        if stage == 'sft':
+            self.model.load(
+                os.path.join(model_dir, 'llm.pt'),
+                os.path.join(model_dir, 'flow.pt'),
+                os.path.join(model_dir, 'hift.pt'),
+                os.path.join(model_dir, 'slm.pt')
+            )
+        else:
+            self.model.load(
+                os.path.join(model_dir, 'llm.pt'),
+                os.path.join(model_dir, 'flow.pt'),
+                os.path.join(model_dir, 'hift.pt'),
+                os.path.join(model_dir, 'slm.pt') if stage == 2 else None
+            )
         
         # Optional optimizations
         if load_vllm:
@@ -232,7 +253,7 @@ class TASTE2:
                 fp16
             )
 
-        self.taste_stage1 = self.model.slm.taste_stage1 if stage == 2 else self.model.llm
+        self.taste_stage1 = self.model.slm.taste_stage1 if stage in [2, 'sft'] else self.model.llm
         
         del configs
 
@@ -800,6 +821,459 @@ class TASTE2:
         else:
             print("Warning: No audio chunks were generated")
 
+    def _segment_audio(self, audio_16k, segment_duration=0.5):
+        """
+        Segment audio into cumulative chunks that include all past audio
+
+        Args:
+            audio_16k: Input audio tensor [1, samples]
+            segment_duration: Duration increment for each segment in seconds
+
+        Returns:
+            List of cumulative audio segments
+            - Segment 1: 0 to 0.5s
+            - Segment 2: 0 to 1.0s
+            - Segment 3: 0 to 1.5s
+            - etc.
+        """
+        segment_samples = int(segment_duration * self.sample_rate)
+        audio_length = audio_16k.shape[-1]
+        segments = []
+
+        # Create cumulative segments
+        current_end = segment_samples
+        segment_num = 1
+
+        while current_end <= audio_length:
+            # Each segment starts from the beginning and goes to current_end
+            segment = audio_16k[:, 0:current_end]
+            segments.append(segment)
+
+            print(f"Segment {segment_num}: 0 to {current_end/self.sample_rate:.1f}s (shape: {segment.shape})")
+
+            current_end += segment_samples
+            segment_num += 1
+
+        # Add final segment if there's remaining audio
+        if current_end - segment_samples < audio_length:
+            final_segment = audio_16k[:, 0:audio_length]
+            segments.append(final_segment)
+            print(f"Final segment {segment_num}: 0 to {audio_length/self.sample_rate:.1f}s (shape: {final_segment.shape})")
+
+        print(f"Created {len(segments)} cumulative segments with {segment_duration}s increments")
+        return segments
+
+    @torch.inference_mode()
+    def generation_sft_streaming(self, audio_16k, asr_model_dir=None, text=None):
+        """
+        Streaming generation for SFT (Supervised Fine-Tuning) mode using bistream inference
+        Now processes audio in 0.5-second segments, preprocessing each segment individually
+        and sending each to SLM inference sequentially.
+
+        Args:
+            audio_16k: Input audio tensor
+            asr_model_dir: ASR model directory for text transcription
+            text: Optional text (if provided, ASR will be skipped)
+
+        Yields:
+            Dict containing audio chunks and metadata
+        """
+        if self.stage != 'sft':
+            raise ValueError("generation_sft_streaming can only be called on sft model")
+
+        print("=== Starting Stage SFT Streaming Generation with Audio Segmentation ===")
+
+        # 1. Segment input audio into 0.5-second chunks
+        print("Segmenting audio into 0.5-second chunks...")
+        audio_segments = self._segment_audio(audio_16k, segment_duration=0.5)
+
+        # Get ASR text for logging (using full audio)
+        asr_text = text if text else self._run_asr(audio_16k, asr_model_dir)
+        print(f"ASR Text: {asr_text}")
+
+        # 2. Find the segment that produces completion pattern and use its SLM generator
+        def find_valid_slm_generator():
+            """Find the first segment that produces \n + <|im_end|> pattern and return its SLM generator"""
+            # Get special tokens from frontend tokenizer
+            newline_token = self.frontend.tokenizer.encode("\n",add_special_tokens = False)
+            im_end_token = self.frontend.tokenizer.encode('<|im_end|>',add_special_tokens = False)
+            im_start_token = self.frontend.tokenizer.encode('<|im_start|>',add_special_tokens = False)
+            user_token = self.frontend.tokenizer.encode('user',add_special_tokens = False)
+
+            print(f"Searching for valid segment - newline: {newline_token}, <|im_end|>: {im_end_token}")
+
+            for i, audio_segment in enumerate(audio_segments):
+                print(f"\nTesting audio segment {i+1}/{len(audio_segments)}")
+                print(f"Segment shape: {audio_segment.shape}, Duration: {audio_segment.shape[-1] / self.sample_rate:.2f}s")
+
+                # Preprocess this segment individually
+                print(f"Preprocessing segment {i+1}...")
+                segment_data = self._preprocess(audio_segment, asr_model_dir=asr_model_dir, text=text)
+
+                # Add chat format prefix: <|im_start|> + role(user) + \n
+                print(f"Adding chat format prefix to segment {i+1}...")
+
+                print(f"Chat tokens - <|im_start|>: {im_start_token}, user: {user_token}, \\n: {newline_token}")
+
+                # Extract single integers from token lists and ensure all tokens are valid
+                im_start_val = im_start_token[0] if isinstance(im_start_token, list) and len(im_start_token) > 0 else (im_start_token if im_start_token is not None else 151644)
+                user_val = user_token[0] if isinstance(user_token, list) and len(user_token) > 0 else (user_token if user_token is not None else 872)
+                newline_val = newline_token[0] if isinstance(newline_token, list) and len(newline_token) > 0 else (newline_token if newline_token is not None else 198)
+
+                print(f"Extracted token values: im_start={im_start_val}, user={user_val}, newline={newline_val}")
+
+                # Create prefix tokens: <|im_start|> + user + \n  (3 tokens)
+                prefix_tokens = torch.tensor([[im_start_val, user_val, newline_val]], dtype=segment_data['text_token'].dtype).to(segment_data['text_token'].device)
+
+                # Prepend prefix to text_token
+                segment_data['text_token'] = torch.cat([prefix_tokens, segment_data['text_token']], dim=1)
+
+                # Update text_token_len (+3)
+                segment_data['text_token_len'] = segment_data['text_token_len'] + 3
+
+                # Pad 3 zeros at front of taste_token_emb
+                batch_size, seq_len, emb_dim = segment_data['taste_token_emb'].shape
+                zero_padding = torch.zeros(batch_size, 3, emb_dim, dtype=segment_data['taste_token_emb'].dtype).to(segment_data['taste_token_emb'].device)
+                segment_data['taste_token_emb'] = torch.cat([zero_padding, segment_data['taste_token_emb']], dim=1)
+
+                print(f"Modified segment {i+1}: text_token shape: {segment_data['text_token'].shape}, taste_emb shape: {segment_data['taste_token_emb'].shape}, text_len: {segment_data['text_token_len']}")
+
+                # Run SLM inference on this preprocessed segment
+                print(f"Testing SLM inference on segment {i+1}...")
+                test_slm_generator = self.model.slm.inference(
+                    **segment_data,
+                    min_len=3,
+                    max_len=20,
+                    sampling=25,
+                )
+
+                # Test only the first 2 tokens to see if this generator has completion pattern
+                has_completion_pattern = False
+                test_outputs = []
+
+                for output_count, output in enumerate(test_slm_generator):
+                    test_outputs.append(output)
+                    # print_green(f"🎯 SLM OUTPUT #{output_count}: {output} (type: {type(output)})")
+
+                    # Extract text_token from output (assuming it's a tuple (text_token, taste_emb))
+                    if isinstance(output, tuple) and len(output) >= 2:
+                        text_token, taste_emb = output[0], output[1]
+                        print_green(f"   📝 Text Token: {text_token} (type: {type(text_token)})")
+                        print_green(f"   🎵 Taste Embedding: shape={taste_emb.shape if hasattr(taste_emb, 'shape') else 'N/A'}")
+
+                        # Check if text_token contains the completion pattern: \n + <|im_end|>
+                        if torch.is_tensor(text_token):
+                            token_ids = text_token.flatten().tolist()
+                        else:
+                            token_ids = [text_token] if isinstance(text_token, int) else text_token
+
+                        print_green(f"   🔢 Token IDs: {token_ids}")
+
+                        # Extract expected token values (handle lists)
+                        expected_newline = newline_token[0] if isinstance(newline_token, list) and len(newline_token) > 0 else newline_token
+                        expected_im_end = im_end_token[0] if isinstance(im_end_token, list) and len(im_end_token) > 0 else im_end_token
+
+                        # For first token: check if it's newline
+                        if output_count == 0 and len(token_ids) > 0 and token_ids[0] == expected_newline:
+                            print_green(f"✓ Segment {i+1}: First token is \\n ({token_ids[0]})")
+                        # For second token: check if it's <|im_end|> (completing the pattern)
+                        if output_count == 1 and len(token_ids) > 0 and token_ids[0] == expected_im_end:
+                            has_completion_pattern = True
+                            print_green(f"✓ Segment {i+1}: Found completion pattern \\n + <|im_end|> in first 2 tokens")
+                            break
+
+                    # Only test first 2 tokens
+                    if output_count >= 1:  # Stop after 2nd token (0-indexed)
+                        break
+
+                if has_completion_pattern:
+                    print(f"✓ Segment {i+1}: SELECTED as the SLM generator (contains \\n + <|im_end|>)")
+                    # Create a fresh SLM generator for this segment and filter to extract only TEXT
+                    raw_slm_generator = self.model.slm.inference(
+                        **segment_data,
+                        min_len=3,
+                        max_len=20,
+                        sampling=25,
+                    )
+
+                    # Create filtered generator that extracts only TEXT content
+                    def create_text_only_generator():
+                        """Filter SLM output to extract only TEXT content"""
+                        # Get special tokens
+                        im_start_token = self.frontend.tokenizer.encode('<|im_start|>')[0]
+                        im_end_token = self.frontend.tokenizer.encode('<|im_end|>')[0]
+                        newline_token = self.frontend.tokenizer.encode("\n")[0]
+                        assistant_token = self.frontend.tokenizer.encode("assistant")[0]
+
+                        print(f"Text filtering tokens - <|im_start|>: {im_start_token}, <|im_end|>: {im_end_token}, \\n: {newline_token}, assistant: {assistant_token}")
+
+                        # State machine to track parsing progress
+                        state = "looking_for_im_end"  # \n + <|im_end|> + <|im_start|> + assistant + \n + TEXT + \n + <|im_end|>
+
+                        # Collect all tokens for full sequence logging
+                        all_raw_tokens = []
+                        yielded_text_tokens = []
+
+                        print_green("=" * 80)
+                        print_green("🎯 FULL SLM GENERATOR TOKEN SEQUENCE:")
+                        print_green("=" * 80)
+
+                        for output_idx, output in enumerate(raw_slm_generator):
+                            if isinstance(output, tuple) and len(output) >= 2:
+                                text_token, taste_emb = output[0], output[1]
+
+                                # Extract token ID
+                                if torch.is_tensor(text_token):
+                                    token_id = text_token.flatten().tolist()[0] if text_token.numel() > 0 else None
+                                else:
+                                    token_id = text_token if isinstance(text_token, int) else (text_token[0] if isinstance(text_token, list) and text_token else None)
+
+                                # Log every token from SLM generator
+                                all_raw_tokens.append(token_id)
+                                token_name = "UNKNOWN"
+                                if token_id == newline_token:
+                                    token_name = "\\n"
+                                elif token_id == im_start_token:
+                                    token_name = "<|im_start|>"
+                                elif token_id == im_end_token:
+                                    token_name = "<|im_end|>"
+                                elif token_id == assistant_token:
+                                    token_name = "assistant"
+
+                                print_green(f"  [{output_idx:02d}] Token ID: {token_id:5d} | Name: {token_name:15s} | State: {state:20s}")
+
+                                # State machine parsing
+                                if state == "looking_for_im_end" and token_id == im_end_token:
+                                    state = "looking_for_im_start"
+                                    print("Found first <|im_end|>, looking for <|im_start|>...")
+                                elif state == "looking_for_im_start" and token_id == im_start_token:
+                                    state = "looking_for_assistant"
+                                    print("Found <|im_start|>, looking for assistant...")
+                                elif state == "looking_for_assistant" and token_id == assistant_token:
+                                    state = "looking_for_newline"
+                                    print("Found assistant, looking for newline...")
+                                elif state == "looking_for_newline" and token_id == newline_token:
+                                    state = "extracting_text"
+                                    print("Found newline, now extracting TEXT content...")
+                                elif state == "extracting_text":
+                                    # Check if this is the ending newline + <|im_end|>
+                                    if token_id == newline_token:
+                                        state = "check_final_im_end"
+                                        print("Found potential ending newline, checking for final <|im_end|>...")
+                                    elif token_id == im_end_token and state == "check_final_im_end":
+                                        print("Found final <|im_end|>, TEXT extraction complete.")
+                                        break
+                                    else:
+                                        # This is actual TEXT content - yield it
+                                        yielded_text_tokens.append(token_id)
+                                        print_green(f"🎯 ✅ YIELDING TEXT TOKEN: {token_id} | Full output: {output}")
+                                        yield output
+                                        if state == "check_final_im_end":
+                                            state = "extracting_text"  # Reset if it wasn't final <|im_end|>
+
+                        # Print final summary
+                        print_green("=" * 80)
+                        print_green("📊 SLM GENERATOR TOKEN SEQUENCE SUMMARY:")
+                        print_green("=" * 80)
+                        print_green(f"🎯 Total SLM tokens generated: {len(all_raw_tokens)}")
+                        print_green(f"📝 Raw token sequence: {all_raw_tokens}")
+                        print_green(f"✅ Text tokens yielded: {len(yielded_text_tokens)}")
+                        print_green(f"📝 Yielded token sequence: {yielded_text_tokens}")
+                        print_green(f"🔄 Filtered out: {len(all_raw_tokens) - len(yielded_text_tokens)} tokens")
+                        print_green("=" * 80)
+
+                    filtered_slm_generator = create_text_only_generator()
+                    return filtered_slm_generator, i+1
+                else:
+                    print(f"✗ Segment {i+1}: No completion pattern found, trying next segment...")
+
+            # If no segment has completion pattern, return None
+            print("⚠️  No segment found with completion pattern!")
+            return None, -1
+
+        # Find the valid SLM generator
+        slm_output_generator, selected_segment = find_valid_slm_generator()
+
+        if slm_output_generator is None:
+            print("ERROR: No valid SLM generator found with completion pattern. Cannot proceed.")
+            return
+
+        print(f"Using SLM generator from segment {selected_segment} for bistream inference.")
+        
+        # 3. Call self.taste_stage1.inference_bistream() using SLM generator directly
+        print("\nStarting bistream inference with SLM output generator...")
+        
+        # Debug: Check model parameter dtypes
+        print("Checking model parameter dtypes...")
+        for name, param in self.taste_stage1.named_parameters():
+            print(f"  {name}: {param.dtype}")
+            break  # Just show first few parameters
+        
+        # Prepare prompt (empty for now, can be extended)
+        prompt_text = torch.zeros(1, 0, dtype=torch.int32).to(self.device)
+        prompt_text_len = torch.tensor([0], dtype=torch.int32).to(self.device)  
+        
+        # Detect model dtype from model parameters
+        model_dtype = next(self.taste_stage1.parameters()).dtype
+        print(f"Model dtype detected: {model_dtype}")
+        
+        # Ensure prompt_speech_feature has the same dtype as the model
+        prompt_speech_feature = torch.zeros(1, 0, 80, dtype=model_dtype).to(self.device)
+        prompt_speech_feature_len = torch.tensor([0], dtype=torch.int32).to(self.device)
+        
+        # Get s3 token generator from bistream inference using SLM generator directly
+        s3_token_generator = self.taste_stage1.inference_bistream(
+            input_generator=slm_output_generator,
+            prompt_text=prompt_text,
+            prompt_text_len=prompt_text_len,
+            prompt_speech_feature=prompt_speech_feature,
+            prompt_speech_feature_len=prompt_speech_feature_len,
+            sampling=25,
+        )
+        
+        # 4. Collect ALL s3 tokens first, then generate overlapping audio sequences
+        print("\nCollecting all s3 tokens first...")
+        
+        all_s3_tokens = []
+        s3_tokens_buffer = []
+        audio_chunks = []
+        chunk_id = 0
+        chunk_size = 20  # s3 token window length, cannot exceed 50
+        
+        # chunk_size / 25 * 24000
+        window_size = int(chunk_size / self.model.flow.input_frame_rate * self.sample_rate)
+        import time
+        start_time = time.time()
+        # Collect all s3 tokens
+        for s3_token in s3_token_generator:
+            all_s3_tokens.append(s3_token)
+            s3_tokens_buffer.append(s3_token)
+            print(f"Generated s3 token: {s3_token}")
+            
+            # Process every 5 s3 tokens
+            if len(s3_tokens_buffer) >= chunk_size:
+                chunk_id += 1
+                print(f"\n--- Processing audio chunk {chunk_id} ({len(s3_tokens_buffer)} tokens) ---")
+                
+                # Convert tokens to tensor (all current s3 tokens)
+                s3_tokens_tensor = torch.tensor(s3_tokens_buffer, dtype=torch.long).unsqueeze(0)
+                ref_tokens_tensor = torch.tensor(all_s3_tokens[:-len(s3_tokens_buffer)],  dtype=torch.long).unsqueeze(0)
+                print(f"S3 tokens shape: {s3_tokens_tensor.shape}")
+                print(f"Ref S3 tokens shape: {ref_tokens_tensor.shape}")
+                
+                # Generate audio chunk
+                try:
+                    # Maybe different _postprocess_streaming, which takes prev s3 tokens as reference
+                    for audio_chunk in self._postprocess_streaming(
+                        s3_tokens=s3_tokens_tensor,
+                        ref_s3_tokens=ref_tokens_tensor,
+                        audio_16k=audio_16k
+                    ):
+                        # audio_chunk = self._postprocess(all_s3_tokens, audio_16k)
+                        print(f"Generated audio shape: {audio_chunk.shape}")
+                        
+                        new_audio_chunk = audio_chunk[:, -window_size:]
+                        print(f"Truncated audio shape: {new_audio_chunk.shape}")
+                        audio_chunks.append(new_audio_chunk)
+                        
+                        # Yield chunk result
+                        yield {
+                            'audio_chunk': new_audio_chunk,
+                            'chunk_id': chunk_id,
+                            's3_tokens': s3_tokens_buffer,
+                            'asr_text': asr_text,
+                            'is_final': False
+                        }
+                        
+                    print(f"Audio chunk {chunk_id} generated successfully")
+                    print(f"Time: {time.time() - start_time} seconds")
+                    
+                except Exception as e:
+                    print(f"Error generating audio chunk {chunk_id}: {e}")
+                    continue
+                
+                # Clear current s3 token buffer
+                s3_tokens_buffer.clear()
+                start_time = time.time()
+        
+        # Process remaining tokens as final chunk with overlap
+        if s3_tokens_buffer:
+            chunk_id += 1
+            print(f"\n--- Processing final audio chunk {chunk_id} ({len(s3_tokens_buffer)} tokens) ---")
+            
+            s3_tokens_tensor = torch.tensor(s3_tokens_buffer, dtype=torch.long).unsqueeze(0)
+            ref_tokens_tensor = torch.tensor(all_s3_tokens[:-len(s3_tokens_buffer)],  dtype=torch.long).unsqueeze(0)
+            print(f"Final S3 tokens shape: {s3_tokens_tensor.shape}")
+            print(f"Ref S3 tokens shape: {ref_tokens_tensor.shape}")
+            
+            try:
+                # audio_chunk = self._postprocess(s3_tokens_tensor, audio_16k)
+                for audio_chunk in self._postprocess_streaming(
+                    s3_tokens=s3_tokens_tensor,
+                    ref_s3_tokens=ref_tokens_tensor,
+                    audio_16k=audio_16k
+                ):
+                    final_window_size = int(window_size / chunk_size * len(s3_tokens_buffer))
+                    new_audio_chunk = audio_chunk[:, -final_window_size:]
+                    audio_chunks.append(new_audio_chunk)
+                    # Yield final chunk
+                    yield {
+                        'audio_chunk': new_audio_chunk,
+                        'chunk_id': chunk_id,
+                        's3_tokens': s3_tokens_buffer,
+                        'asr_text': asr_text,
+                        'is_final': True
+                    }
+                
+                print(f"Final audio chunk {chunk_id} generated successfully")
+                
+            except Exception as e:
+                print(f"Error generating final audio chunk: {e}")
+        
+        # Generate audio from ALL s3 tokens at once for comparison
+        if all_s3_tokens:
+            print(f"\n=== Generating audio from ALL {len(all_s3_tokens)} s3 tokens at once ===")
+            all_s3_tokens_tensor = torch.tensor(all_s3_tokens, dtype=torch.long).unsqueeze(0)
+            print(f"All S3 tokens shape: {all_s3_tokens_tensor.shape}")
+            print(f"All S3 tokens: {all_s3_tokens}")
+            
+            try:
+                single_audio = self._postprocess(all_s3_tokens_tensor, audio_16k)
+                print(f"Single audio from all tokens generated successfully (shape: {single_audio.shape})")
+                print(f"Single audio duration: {single_audio.shape[-1] / self.sample_rate:.2f}s")
+                
+                # Yield the single audio result
+                yield {
+                    'single_audio': single_audio,
+                    'all_s3_tokens': all_s3_tokens,
+                    'total_tokens': len(all_s3_tokens),
+                    'asr_text': asr_text,
+                    'is_single_audio': True
+                }
+                
+            except Exception as e:
+                print(f"Error generating single audio from all tokens: {e}")
+                single_audio = None
+        else:
+            single_audio = None
+        
+        # Combine all audio chunks with crossfading for smooth transitions
+        if audio_chunks:
+            print(f"\n=== Combining {len(audio_chunks)} audio chunks with crossfading ===")
+            final_audio = self._crossfade_audio_chunks(audio_chunks, crossfade_samples=int(0.01 * self.sample_rate))  # 10ms crossfade
+            
+            print(f"Final audio shape: {final_audio.shape}")
+            print(f"Final audio duration: {final_audio.shape[-1] / self.sample_rate:.2f}s")
+            
+            yield {
+                'final_audio': final_audio,
+                'total_chunks': len(audio_chunks),
+                'asr_text': asr_text,
+                'is_complete': True
+            }
+        else:
+            print("Warning: No audio chunks were generated")
+
 
 def process_single_file_streaming(model, audio_file, output_dir, asr_model_dir, stage):
     """Process a single audio file with streaming generation"""
@@ -825,6 +1299,10 @@ def process_single_file_streaming(model, audio_file, output_dir, asr_model_dir, 
             )
         elif stage == '2':
             streaming_generator = model.generation_stage2_streaming(
+                audio_16k, asr_model_dir=asr_model_dir
+            )
+        elif stage == 'sft':
+            streaming_generator = model.generation_sft_streaming(
                 audio_16k, asr_model_dir=asr_model_dir
             )
         else:
@@ -923,8 +1401,8 @@ def main():
     parser.add_argument('--output_dir', type=str, required=True, help='Output directory')
     parser.add_argument('--test_files', type=str, nargs='+', required=True, help='Audio/Arrow file paths (multiple files supported)')
     parser.add_argument('--asr_model_dir', type=str, default="openai/whisper-large-v3", help='ASR model')
-    parser.add_argument('--stage', type=str, choices=['1', '2'], default='1', 
-                        help='Which stage to run: 1 or 2 (default: 1)')
+    parser.add_argument('--stage', type=str, choices=['1', '2', 'sft'], default='1',
+                        help='Which stage to run: 1, 2, or sft (default: 1)')
     
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
@@ -942,6 +1420,9 @@ def main():
     elif args.stage == '2':
         print(f"\nInitializing TASTE2 model for Stage 2 (Streaming)...")
         model = TASTE2(args.model_dir, stage=2, fp16=False)
+    elif args.stage == 'sft':
+        print(f"\nInitializing TASTE2 model for SFT (Streaming)...")
+        model = TASTE2(args.model_dir, stage='sft', fp16=False)
     
     # Process all files
     all_results = []
