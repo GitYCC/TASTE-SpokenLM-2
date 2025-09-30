@@ -12,16 +12,16 @@ slm_input_size: 3584
 slm_output_size: 3584
 spk_embed_dim: 192
 codebook_dim: 256
-qwen_pretrain_path: '/mnt/shared/NTU_TASLM/yc/TASTE-SpokenLM-2/training/pretrained_models/CosyVoice2-0.5B/CosyVoice-BlankEN'
-qwen_pretrain_path_for_slm: '/mnt/shared/NTU_TASLM/yc/TASTE-SpokenLM-2/training/pretrained_models/Qwen2-7B'
+qwen_pretrain_path: '/mnt/shared/p01/yc/models/TASTE2-8B-EN/CosyVoice-BlankEN'
+qwen_pretrain_path_for_slm: '/mnt/shared/p01/yc/models/TASTE2-8B-EN/qwen2-7b'
 token_frame_rate: 25
 token_mel_ratio: 2
-attn_implementation: 'eager' #'sdpa'
+attn_implementation: 'eager' #'sdpa[]'
 max_frames_in_batch: 1000 # original: 2000
 accum_grad: 4 # original: 2
 lr: 5e-5
 save_per_step: 10000  # production: 10000
-wandb_run_name: "250915-sft-emb"
+wandb_run_name: "250930-sft-emb"
 
 # stream related params
 chunk_size: 25 # streaming inference chunk size, in token
@@ -41,7 +41,7 @@ llm: !new:taste_speech.taste2.taste_decoder.TasteS3GenerationLM
         pretrain_path: !ref <qwen_pretrain_path>
         attn_implementation: !ref <attn_implementation>
     taste_tokenizer: !new:taste_speech.taste2.taste_tokenizer.TasteTokenizer
-        backbond_name_or_path: '/mnt/shared/NTU_TASLM/yc/TASTE-SpokenLM-2/training/pretrained_models/distil-large-v3'
+        backbond_name_or_path: '/mnt/shared/p01/yc/models/TASTE2-8B-EN/distil-whisper'
         attn_implementation: !ref <attn_implementation>
         whisper_decoder_embed_dim: 1280
         encoder_input_size: !ref <llm_input_size>
@@ -68,7 +68,7 @@ slm: !new:taste_speech.taste2.taste_slm.TasteSLM
     llm_output_size: !ref <slm_output_size>
     d: !ref <codebook_dim>  
     taste_stage1: !ref <llm>
-    path_reload_taste_stage1: '/mnt/shared/NTU_TASLM/yc/models/TASTE2_8B_EN/llm.pt'
+    path_reload_taste_stage1: '/mnt/shared/p01/yc/models/TASTE2-8B-EN/llm.pt'
     slm: !new:taste_speech.taste2.cosyvoice.llm.llm.Qwen2Encoder
         pretrain_path: !ref <qwen_pretrain_path_for_slm>
         attn_implementation: !ref <attn_implementation>
@@ -198,33 +198,30 @@ hifigan: !new:taste_speech.taste2.cosyvoice.hifigan.hifigan.HiFiGan
         !ref <mel_spec_transform1>
     ]
 
-# processor functions
-parquet_opener: !name:taste_speech.taste2.cosyvoice.dataset.processor.parquet_opener
-sft_parquet_opener: !name:taste_speech.taste2.cosyvoice.dataset.processor.sft_parquet_opener
-expand_sft_conversations: !name:taste_speech.taste2.cosyvoice.dataset.processor.expand_sft_conversations
+# sft_processor functions
+sft_parquet_opener: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.sft_parquet_opener
+expand_sft_conversations: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.expand_sft_conversations
 get_tokenizer: !name:taste_speech.taste2.cosyvoice.tokenizer.tokenizer.get_qwen_tokenizer
     token_path: !ref <qwen_pretrain_path>
     skip_special_tokens: True
 allowed_special: 'all'
-tokenize: !name:taste_speech.taste2.cosyvoice.dataset.processor.tokenize
+tokenize: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.tokenize
     get_tokenizer: !ref <get_tokenizer>
     allowed_special: !ref <allowed_special>
-filter: !name:taste_speech.taste2.cosyvoice.dataset.processor.filter
+filter: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.filter
     max_length: 40960
     min_length: 100
     token_max_length: 200
     token_min_length: 1
-resample: !name:taste_speech.taste2.cosyvoice.dataset.processor.resample
+resample: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.resample
     resample_rate: !ref <sample_rate>
 audio_extractor: !new:taste_speech.modules_taste.cosyvoice.whisper_frontend.WhisperFrontend
     whisper_model: large-v3
     do_pad_trim: True
     permute: True
-extract_audio: !name:taste_speech.taste2.cosyvoice.dataset.processor.extract_audio
+extract_audio: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.extract_audio
     audio_extractor: !ref <audio_extractor>
     target_sample_rate: 16_000
-truncate: !name:taste_speech.taste2.cosyvoice.dataset.processor.truncate
-    truncate_length: 24480 # must be a multiplier of hop_size
 feat_extractor: !name:taste_speech.taste2.matcha.utils.audio.mel_spectrogram
     n_fft: 1920
     num_mels: 80
@@ -234,30 +231,22 @@ feat_extractor: !name:taste_speech.taste2.matcha.utils.audio.mel_spectrogram
     fmin: 0
     fmax: 8000
     center: False
-compute_fbank: !name:taste_speech.taste2.cosyvoice.dataset.processor.compute_fbank
+compute_fbank: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.compute_fbank
     feat_extractor: !ref <feat_extractor>
     token_mel_ratio: 2
-compute_f0: !name:taste_speech.taste2.cosyvoice.dataset.processor.compute_f0
-    sample_rate: !ref <sample_rate>
-    hop_size: 480
-parse_embedding: !name:taste_speech.taste2.cosyvoice.dataset.processor.parse_embedding
-    normalize: True
-format_and_concatenate_conversation: !name:taste_speech.taste2.cosyvoice.dataset.processor.format_and_concatenate_conversation
+format_and_concatenate_conversation: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.format_and_concatenate_conversation
     get_tokenizer: !ref <get_tokenizer>
-shuffle: !name:taste_speech.taste2.cosyvoice.dataset.processor.shuffle
+shuffle: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.shuffle
     shuffle_size: 1000
-sort: !name:taste_speech.taste2.cosyvoice.dataset.processor.sort
+sort: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.sort
     sort_size: 500  # sort_size should be less than shuffle_size
-batch: !name:taste_speech.taste2.cosyvoice.dataset.processor.batch
+batch: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.batch
     batch_type: 'dynamic'
     max_frames_in_batch: !ref <max_frames_in_batch> 
-padding: !name:taste_speech.taste2.cosyvoice.dataset.processor.padding
-    use_spk_embedding: False # change to True during sft
-padding_taste2: !name:taste_speech.taste2.cosyvoice.dataset.processor.padding_taste2
-padding_sft: !name:taste_speech.taste2.cosyvoice.dataset.processor.padding_sft
+padding_sft: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.padding_sft
 
 
-# dataset processor pipeline for SFT conversation training
+# dataset sft_processor pipeline for SFT conversation training
 data_pipeline: [
     !ref <sft_parquet_opener>,
     !ref <expand_sft_conversations>, # Process conversation-style data and set sft_training flag
