@@ -22,6 +22,7 @@ from torch.nn.utils.rnn import pad_sequence, unpad_sequence
 
 from taste_speech.taste2.cosyvoice.utils.common import th_accuracy
 from taste_speech.modules_taste.fusion import TTS_INPUT_FUSION_CLASSES
+from taste_speech.taste2.taste_sft_utils import train_expand, train_reconstruct
 
 # Constants
 IGNORE_ID = -1
@@ -477,129 +478,6 @@ class TasteSLM(nn.Module):
         
         return lm_text_target, lm_taste_latent_target, lm_taste_mask, lm_input, lm_input_len
 
-    def _prepare_for_sft_training(self, batch, device):
-        full_text_token = batch['text_token']  # [B, L] - conversations with padded text tokens
-        full_text_token_len = batch['text_token_len']  # [B] - lengths of each conversation
-        full_audio_feature = batch['audio_feature'].to(dtype=torch.half)  # [B, M, L, D] - convert to half early
-        full_audio_feature_lens = batch['audio_feature_lens']  # [B, M] - lengths of audio features for each message
-        full_token_message_ids = batch['token_message_ids']  # [B, L] - message IDs for each token
-
-        # print("Original batch sizes:")
-        # print(f"text_token: {full_text_token.size()}")
-        # print(f"audio_feature: {full_audio_feature.size()}")
-        # print(f"audio_feature_lens: {full_audio_feature_lens.size()}")
-        # print(f"token_message_ids: {full_token_message_ids.size()}")
-
-        # Step 1: Expand all messages from B,M,L,D to new batch format
-        new_batch_text_tokens = []
-        new_batch_text_lens = []
-        new_batch_audio_features = []
-        new_batch_audio_lens = []
-
-        # Step 3: Track mapping for reconstruction - (original_batch_idx, message_id, new_batch_position)
-        message_mapping = []
-
-        B, M, L, D = full_audio_feature.size()
-        new_batch_idx = 0
-
-        for batch_idx in range(B):
-            text_tokens = full_text_token[batch_idx]  # [L]
-            text_len = full_text_token_len[batch_idx].item()
-            token_msg_ids = full_token_message_ids[batch_idx]  # [L]
-            audio_features = full_audio_feature[batch_idx]  # [M, L, D]
-            audio_lens = full_audio_feature_lens[batch_idx]  # [M]
-
-            # Find unique message IDs (excluding -1 for special tokens/padding)
-            unique_msg_ids = torch.unique(token_msg_ids)
-            unique_msg_ids = unique_msg_ids[unique_msg_ids != -1]  # Remove -1
-            unique_msg_ids = sorted(unique_msg_ids.tolist())  # Sort for consistent ordering
-
-            for msg_id in unique_msg_ids:
-                # Extract text tokens for this message
-                text_mask = (token_msg_ids == msg_id)
-                msg_text_tokens = text_tokens[text_mask]
-
-                # Get audio features for this message (msg_id corresponds to message index)
-                if msg_id < M and audio_lens[msg_id] > 0:
-                    msg_audio_len = audio_lens[msg_id].item()
-                    msg_audio_features = audio_features[msg_id, :msg_audio_len, :]  # [audio_len, D]
-
-                    # Only add if both text and audio exist for this message
-                    if msg_text_tokens.size(0) > 0 and msg_audio_features.size(0) > 0:
-                        new_batch_text_tokens.append(msg_text_tokens)
-                        new_batch_text_lens.append(msg_text_tokens.size(0))
-                        new_batch_audio_features.append(msg_audio_features)
-                        new_batch_audio_lens.append(msg_audio_len)
-
-                        # Store mapping: (original_batch_idx, message_id, new_batch_position)
-                        message_mapping.append((batch_idx, msg_id, new_batch_idx))
-                        new_batch_idx += 1
-
-        # Step 2: Create new batch format for stage1 processing
-        new_text_token = pad_sequence(new_batch_text_tokens, batch_first=True, padding_value=0).to(device)
-        new_text_token_len = torch.tensor(new_batch_text_lens, dtype=torch.int32, device=device).to(device)
-        # Ensure audio features match the conv1 layer dtype (half) and move to correct device
-        new_audio_feature = pad_sequence(new_batch_audio_features, batch_first=True, padding_value=0)
-        target_dtype = torch.half
-        new_audio_feature = new_audio_feature.to(dtype=target_dtype, device=device).to(device)
-        new_audio_feature_len = torch.tensor(new_batch_audio_lens, dtype=torch.int32, device=device).to(device)
-
-        # print("Expanded to new batch format:")
-        # print(f"Number of individual messages: {len(new_batch_text_tokens)}")
-        # print(f"new_text_token: {new_text_token.size()}")
-        # print(f"new_audio_feature: {new_audio_feature.size()}")
-
-        # Step 4: Pass into stage1
-        tokenized = self.taste_stage1.taste_tokenizer(new_text_token, new_text_token_len,
-                                                      new_audio_feature, new_audio_feature_len)
-        new_taste_embs = tokenized['taste_token_emb']  # [num_messages, msg_len, emb_dim]
-        new_taste_latents = tokenized['taste_latent']  # [num_messages, msg_len, latent_dim]
-
-        # Step 5: Reconstruct taste_token_emb and taste_latent using saved mapping
-        reconstructed_taste_embs = []
-        reconstructed_taste_latents = []
-
-        for batch_idx in range(B):
-            text_len = full_text_token_len[batch_idx].item()
-            padded_text_len = full_text_token.size(1)  # Use padded length instead
-            token_msg_ids = full_token_message_ids[batch_idx]  # [L]
-            emb_dim = new_taste_embs.size(-1)
-            latent_dim = new_taste_latents.size(-1)
-
-            # Initialize with zeros (for special tokens with msg_id == -1) - use padded length
-            conversation_taste_emb = torch.zeros(padded_text_len, emb_dim, device=device)
-            conversation_taste_latent = torch.zeros(padded_text_len, latent_dim, device=device)
-
-            # Fill in processed embeddings using the mapping
-            for orig_batch_idx, msg_id, new_batch_pos in message_mapping:
-                if orig_batch_idx == batch_idx:
-                    # Find positions where this message appears in the original conversation
-                    msg_positions = (token_msg_ids[:text_len] == msg_id).nonzero(as_tuple=True)[0]
-
-                    # Get the processed embeddings from the new batch
-                    msg_taste_emb = new_taste_embs[new_batch_pos]  # [msg_len, emb_dim]
-                    msg_taste_latent = new_taste_latents[new_batch_pos]  # [msg_len, latent_dim]
-                    msg_len = new_text_token_len[new_batch_pos].item()
-
-                    # Map processed embeddings to conversation positions
-                    min_len = min(len(msg_positions), msg_len)
-                    if min_len > 0:
-                        conversation_taste_emb[msg_positions[:min_len]] = msg_taste_emb[:min_len]
-                        conversation_taste_latent[msg_positions[:min_len]] = msg_taste_latent[:min_len]
-
-            reconstructed_taste_embs.append(conversation_taste_emb)
-            reconstructed_taste_latents.append(conversation_taste_latent)
-
-        # Convert to batch tensor (already same length as padded text tokens)
-        taste_token_emb = torch.stack(reconstructed_taste_embs, dim=0)
-        taste_latent = torch.stack(reconstructed_taste_latents, dim=0)
-
-        # print("Reconstructed:")
-        # print(f"text_token: {full_text_token.size()}")
-        # print(f"taste_token_emb: {taste_token_emb.size()}")
-        # print(f"taste_latent: {taste_latent.size()}")
-        return full_text_token.to(device), full_text_token_len.to(device), taste_token_emb, taste_latent
-
     def forward(
         self,
         batch: dict,
@@ -633,20 +511,37 @@ class TasteSLM(nn.Module):
                 - z: Predicted taste latent representations
         """
         if batch.get('sft_training') is True:
-            text_token, text_token_len, taste_token_emb, taste_latent = self._prepare_for_sft_training(batch, device)
+            # Switch lm_target to sft
             lm_input_target_mode = "sft"
+            
+            # Data for recontruct
+            full_text_token = batch['text_token']  # [B, L]
+            full_text_token_len = batch['text_token_len']  # [B]
+            full_token_message_ids = batch['token_message_ids']  # [B, L]
+            
+            # Prepare data for taste_stage1 (expand dialogue batch to message batch)
+            text_token, text_token_len, audio_feature, audio_feature_len, message_mapping = train_expand(batch, device)
         else:
+            # Switch lm_target to pretrain
+            lm_input_target_mode = "pretrain"
             # Extract and move input tensors to the specified device
             text_token = batch['text_token'].to(device)
             text_token_len = batch['text_token_len'].to(device)
             audio_feature = batch['audio_feature'].to(device)
             audio_feature_len = batch['audio_feature_len'].to(device)
 
-            # Encode audio features to taste token embeddings using taste tokenizer
-            tokenized = self.taste_stage1.taste_tokenizer(text_token, text_token_len, audio_feature, audio_feature_len)
-            taste_token_emb = tokenized['taste_token_emb']
-            taste_latent = tokenized['taste_latent']
-            lm_input_target_mode = "pretrain"
+        # Encode audio features to taste token embeddings using taste tokenizer
+        tokenized = self.taste_stage1.taste_tokenizer(text_token, text_token_len, audio_feature, audio_feature_len)
+        taste_token_emb = tokenized['taste_token_emb']
+        taste_latent = tokenized['taste_latent']
+        
+
+        if batch.get('sft_training') is True:
+            # Recontruct for slm training (concat message batch to dialogue batch)
+            text_token, text_token_len, taste_token_emb, taste_latent = \
+            train_reconstruct(taste_token_emb, taste_latent, message_mapping,
+                            full_text_token, full_text_token_len, full_token_message_ids,
+                            text_token_len, device)
 
         text_token_emb = self.slm.forward_embed_tokens(text_token)
 

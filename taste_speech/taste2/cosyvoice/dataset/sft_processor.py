@@ -26,7 +26,7 @@ import pyworld as pw
 AUDIO_FORMAT_SETS = {'flac', 'mp3', 'm4a', 'ogg', 'opus', 'wav', 'wma'}
 
 
-def sft_parquet_opener(data):
+def sft_parquet_opener(data, mode='train'):
     """ Open parquet files containing SFT conversation data with message structure.
         
         Expected parquet format:
@@ -432,7 +432,7 @@ def resample(data, resample_rate=22050, min_sample_rate=16000, mode='train'):
 
 
 # NOTE: This is the audio feature extraction process for our `audio branch`!
-def extract_audio(data, audio_extractor, target_sample_rate=16_000, **kwargs):
+def extract_audio(data, audio_extractor, target_sample_rate=16_000, mode='train', **kwargs):
     """ Extract audio for audio branch
         Handles  SFT format (multi-segment speech_list)
         
@@ -594,7 +594,7 @@ def sort(data, sort_size=500, mode='train'):
         yield x
 
 
-def static_batch(data, batch_size=16):
+def static_batch(data, batch_size=16, mode='train'):
     """ Static batch the data by `batch_size`
 
         Args:
