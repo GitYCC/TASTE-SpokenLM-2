@@ -245,19 +245,13 @@ class Qwen2Encoder(torch.nn.Module):
                 lora_target_modules = list(set(lora_target_modules + linear_names))
 
             # Find and print all embedding layers
-            # embedding_names = self._find_all_embedding_names(self.model)
-            # print(f"Found embedding layers: {embedding_names}")
 
-            # Handle selective token embedding
-            if lora_config['lora_mode'] == 'sft' and lora_config.get('selective_tokens'):
-                # Don't add embed_tokens to LoRA, we'll handle it separately
-                self.selective_tokens = lora_config['selective_tokens']
-                self.use_selective_embedding = True
-            elif lora_config['lora_mode'] == 'sft':
+            if lora_config['lora_mode'] == 'sft':
                 # Standard LoRA for all embed_tokens
                 if 'embed_tokens' not in lora_target_modules:
                     lora_target_modules.append('embed_tokens')
                 self.use_selective_embedding = False
+                
             lora_config = LoraConfig(
                 r=lora_config['lora_r'],
                 lora_alpha=lora_config['lora_alpha'],
@@ -271,13 +265,6 @@ class Qwen2Encoder(torch.nn.Module):
             )
             self.model = get_peft_model(self.model, lora_config)
 
-    def _find_all_embedding_names(self, model):
-        """Find all embedding layer names in the model"""
-        embedding_names = []
-        for name, module in model.named_modules():
-            if isinstance(module, torch.nn.Embedding):
-                embedding_names.append(name)
-        return embedding_names
 
     def forward_embed_tokens(self, text_token):
         if self._use_lora:
