@@ -1,0 +1,25 @@
+{
+  "total_files": 1,
+  "successful_files": 1,
+  "failed_files": 0,
+  "stage": "sft",
+  "streaming": true,
+  "model_dir": "/mnt/shared/p01/yc/models/TASTE2_SFT",
+  "asr_model_dir": "openai/whisper-large-v3",
+  "files": [
+    {
+      "original_text": null,
+      "audio_basename": "syn_data_n_filler",
+      "audio_file": "/mnt/shared/p01/dienruei/synthetic_data/val_syn_data/syn_data_n_filler.data7-2.scenario45_18_turn_01_user.mp3",
+      "results": {
+        "stagesft_streaming": {
+          "final_audio_path": "./results/sft/streaming/syn_data_n_filler_streaming_final_crossfaded.wav",
+          "single_audio_path": "./results/sft/streaming/syn_data_n_filler_single_from_all_tokens.wav",
+          "asr_text": " I've heard that some pests can be beneficial to gardens. Can you tell me more about that?",
+          "total_chunks": 16,
+          "streaming_summary_path": "./results/sft/streaming/syn_data_n_filler_streaming_summary.json"
+        }
+      }
+    }
+  ]
+}
