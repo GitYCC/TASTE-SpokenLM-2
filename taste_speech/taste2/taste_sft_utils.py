@@ -127,3 +127,107 @@ def reconstruct_conversations_from_messages(new_taste_embs, new_taste_latents, m
     taste_latent = torch.stack(reconstructed_taste_latents, dim=0)
 
     return full_text_token.to(device), full_text_token_len.to(device), taste_token_emb, taste_latent
+
+
+def package_message(tokenizer, role, asr_text, stream = False):
+    """
+    Package text into ChatML format with message dimension tracking.
+
+    Args:
+        tokenizer: Tokenizer instance for encoding text
+        role: Role ('system', 'user', 'assistant') for this turn
+        asr_text: Text content for the message
+
+    Returns:
+        formatted_text_token: tensor of shape [1, seq_len]
+        formatted_text_token_len: tensor with sequence length
+        token_message_ids: list tracking which tokens are content (0) vs structural (-1)
+    """
+    im_start_token = "<|im_start|>"
+    im_end_token = "<|im_end|>"
+    newline_token = "\n"
+
+    # Encode each component
+    im_start_id = tokenizer.encode(im_start_token, add_special_tokens=False)
+    im_end_id = tokenizer.encode(im_end_token, add_special_tokens=False)
+    newline_id = tokenizer.encode(newline_token, add_special_tokens=False)
+    role_ids = tokenizer.encode(role, add_special_tokens=False)
+    content_tokens = tokenizer.encode(asr_text, add_special_tokens=False)
+
+    # Build concatenated tokens with message dimension tracking
+    concatenated_tokens = []
+    token_message_ids = []
+
+    # Define token groups with their corresponding message IDs
+    if stream == True: 
+        token_groups = [
+            (im_start_id, -1),
+            (role_ids, -1),
+            (newline_id, -1),
+            (content_tokens, 0),
+        ]
+    else:
+       token_groups = [
+            (im_start_id, -1),
+            (role_ids, -1),
+            (newline_id, -1),
+            (content_tokens, 0),
+            (newline_id, -1),
+            (im_end_id, -1)
+        ]
+    # Iterate over the groups and extend tokens and message IDs
+    for tokens, message_id in token_groups:
+        concatenated_tokens.extend(tokens)
+        token_message_ids.extend([message_id] * len(tokens))
+
+    # Convert to tensors
+    formatted_text_token = torch.tensor(concatenated_tokens, dtype=torch.int32).unsqueeze(0)
+    formatted_text_token_len = torch.tensor([len(concatenated_tokens)], dtype=torch.int32)
+
+    return formatted_text_token, formatted_text_token_len, token_message_ids
+
+
+
+def unpackage_message(
+    slm,
+    taste_token_emb: torch.Tensor,
+    formatted_text_token: torch.Tensor,
+    formatted_text_token_len: torch.Tensor,
+    token_message_ids: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Reconstruct taste embeddings for SFT mode.
+
+    Args:
+        slm: Speech Language Model with forward_embed_tokens method
+        taste_token_emb: Original taste token embeddings
+        formatted_text_token: Formatted text tokens for SFT mode
+        formatted_text_token_len: Length of formatted text tokens
+        token_message_ids: Message IDs for each token position
+
+    Returns:
+        Tuple of (text_token_emb, taste_token_emb, text_token, text_token_len)
+    """
+    text_token_emb = slm.forward_embed_tokens(formatted_text_token).float()
+    # SFT mode: reconstruct like training _prepare_for_sft_training
+    device = formatted_text_token.device
+    formatted_len = formatted_text_token_len.item()
+    emb_dim = taste_token_emb.size(-1)
+
+    # Initialize with all zeros for formatted sequence
+    reconstructed_taste_emb = torch.zeros(1, formatted_len, emb_dim, device=device)
+
+    # Find content positions (where token_message_ids == 0)
+    content_mask = (token_message_ids.squeeze() == 0)[:formatted_len]
+
+    if content_mask.any():
+        content_positions = content_mask.nonzero(as_tuple=True)[0]
+        min_len = min(len(content_positions), taste_token_emb.size(1))
+        if min_len > 0:
+            reconstructed_taste_emb[0, content_positions[:min_len]] = taste_token_emb[0, :min_len]
+
+    taste_token_emb = reconstructed_taste_emb.to(device)
+    # Use formatted tokens for text processing
+    text_token = formatted_text_token
+    text_token_len = formatted_text_token_len
+
+    return text_token_emb, taste_token_emb, text_token, text_token_len

@@ -22,7 +22,7 @@ from torch.nn.utils.rnn import pad_sequence, unpad_sequence
 
 from taste_speech.taste2.cosyvoice.utils.common import th_accuracy
 from taste_speech.modules_taste.fusion import TTS_INPUT_FUSION_CLASSES
-from taste_speech.taste2.taste_sft_utils import expand_conversations_to_messages, reconstruct_conversations_from_messages
+from taste_speech.taste2.taste_sft_utils import expand_conversations_to_messages, reconstruct_conversations_from_messages, unpackage_message
 
 # Constants
 IGNORE_ID = -1
@@ -577,6 +577,9 @@ class TasteSLM(nn.Module):
         audio_feature: Optional[torch.Tensor] = None,
         audio_feature_len: Optional[torch.Tensor] = None,
         taste_token_emb: Optional[torch.Tensor] = None,
+        formatted_text_token: Optional[torch.Tensor] = None,        #only for sft mode
+        formatted_text_token_len: Optional[torch.Tensor] = None,    #only for sft mode
+        token_message_ids:Optional[torch.Tensor] = None,    #only for sft mode
         sampling: int = 25,
         max_len: int = 20,
         min_len: int = 5,
@@ -593,12 +596,17 @@ class TasteSLM(nn.Module):
             tokenized = self.taste_tokenizer(text_token, text_token_len, audio_feature, audio_feature_len)
             taste_token_emb = tokenized['taste_token_emb']
 
+        # Reconstruct taste embeddings for SFT mode if needed
+        if formatted_text_token is not None and token_message_ids is not None:
+            text_token_emb, taste_token_emb, text_token, text_token_len = unpackage_message(
+                self.slm, taste_token_emb, formatted_text_token, formatted_text_token_len, token_message_ids
+            )
 
         # lm_input
         fused = self.fusing_module(text_token_emb, taste_token_emb, text_token_len, self.delay)
         lm_input = fused[:, :-1 * self.delay, :]  # truncate to text end
         reminding_taste_token_emb = taste_token_emb[:, -1 * self.delay:, :]
-
+        print(f'!!!!!!!!!{max_len}!!!!!!!!!!!')
         # 5. step by step decode
         for text_token, taste_emb in self.inference_wrapper(lm_input, reminding_taste_token_emb, max_len, min_len, uuid):
             yield (text_token, taste_emb)
