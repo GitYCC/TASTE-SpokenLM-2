@@ -1,8 +1,8 @@
 # set random seed, so that you may reproduce your result.
-__set_seed1: !apply:random.seed [1313]
-__set_seed2: !apply:numpy.random.seed [1313]
-__set_seed3: !apply:torch.manual_seed [1313]
-__set_seed4: !apply:torch.cuda.manual_seed_all [1313]
+__set_seed1: !apply:random.seed [6534]
+__set_seed2: !apply:numpy.random.seed [6534]
+__set_seed3: !apply:torch.manual_seed [6534]
+__set_seed4: !apply:torch.cuda.manual_seed_all [6534]
 
 # fixed params
 sample_rate: 24000
@@ -13,14 +13,17 @@ slm_output_size: 3584
 spk_embed_dim: 192
 codebook_dim: 256
 qwen_pretrain_path: '/mnt/shared/p01/yc/models/TASTE2-8B-EN/CosyVoice-BlankEN'
-qwen_pretrain_path_for_slm: '/mnt/shared/p01/yc/models/TASTE2-8B-EN/qwen2-7b'
+qwen_pretrain_path_for_slm: ''
+qwen_pretrain_path_for_slm_7b: '/mnt/shared/p01/yc/models/TASTE2-8B-EN/qwen2-7b'
+taste_tokenizer_backbond_path: '/mnt/shared/p01/yc/models/TASTE2-8B-EN/distil-whisper'
+path_reload_taste_stage1: ''
 token_frame_rate: 25
 token_mel_ratio: 2
-attn_implementation: 'eager' #'sdpa[]'
+attn_implementation: 'eager' #'sdpa'
 max_frames_in_batch: 1000 # original: 2000
-accum_grad: 4 # original: 2
-lr: 5e-5
-save_per_step: 10000  # production: 10000
+accum_grad: 2 # original: 2
+lr: 1e-5
+save_per_step: 1000  # production: 10000
 wandb_run_name: "250930-sft-emb"
 
 # stream related params
@@ -39,15 +42,13 @@ llm: !new:taste_speech.taste2.taste_decoder.TasteS3GenerationLM
     mix_ratio: [5, 15]
     llm: !new:taste_speech.taste2.cosyvoice.llm.llm.Qwen2Encoder
         pretrain_path: !ref <qwen_pretrain_path>
-        attn_implementation: !ref <attn_implementation>
     taste_tokenizer: !new:taste_speech.taste2.taste_tokenizer.TasteTokenizer
-        backbond_name_or_path: '/mnt/shared/p01/yc/models/TASTE2-8B-EN/distil-whisper'
-        attn_implementation: !ref <attn_implementation>
+        backbond_name_or_path: !ref <taste_tokenizer_backbond_path>
         whisper_decoder_embed_dim: 1280
         encoder_input_size: !ref <llm_input_size>
         quantization_on: True
         kwargs_for_quantizer:
-            codebook_dim: !ref <codebook_dim>
+            codebook_dim: !ref <codebook_dim>  
             codebook_size: 512
             decay: 0.99
             dim: !ref <llm_input_size>
@@ -68,13 +69,12 @@ slm: !new:taste_speech.taste2.taste_slm.TasteSLM
     llm_output_size: !ref <slm_output_size>
     d: !ref <codebook_dim>  
     taste_stage1: !ref <llm>
-    path_reload_taste_stage1: '/mnt/shared/p01/yc/models/TASTE2-8B-EN/llm.pt'
+    path_reload_taste_stage1: !ref <path_reload_taste_stage1>
     slm: !new:taste_speech.taste2.cosyvoice.llm.llm.Qwen2Encoder
-        pretrain_path: !ref <qwen_pretrain_path_for_slm>
+        pretrain_path: !ref <qwen_pretrain_path_for_slm_7b>
         attn_implementation: !ref <attn_implementation>
         use_lora: true
         lora_config:
-            lora_mode: 'sft'
             lora_model_dir: null
             lora_r: 64
             lora_alpha: 128
@@ -83,6 +83,8 @@ slm: !new:taste_speech.taste2.taste_slm.TasteSLM
             lora_target_modules: null
             lora_fan_in_fan_out: null
             lora_modules_to_save: null
+            # --
+            lora_mode: 'sft' # new for sft
     fusing_module: !new:taste_speech.taste2.taste_slm.TasteSLMFusing
         tokenizer_output_size: !ref <llm_output_size>
         llm_input_size: !ref <slm_input_size>
@@ -244,7 +246,6 @@ batch: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.batch
     batch_type: 'dynamic'
     max_frames_in_batch: !ref <max_frames_in_batch> 
 padding_sft: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.padding_sft
-
 
 # dataset sft_processor pipeline for SFT conversation training
 data_pipeline: [

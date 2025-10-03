@@ -28,9 +28,8 @@ torchrun --nnodes=1 --nproc_per_node=$num_gpus \
   training/train.py \
   --train_engine $train_engine \
   --config training/conf/$yaml_name.yaml \
-  --train_data /mnt/shared/p01/wilz/TASTE-SpokenLM-2/train.data.list \
-  --cv_data /mnt/shared/p01/wilz/TASTE-SpokenLM-2/dev.data.list\
-  --qwen_pretrain_path $stage1_checkpoint/CosyVoice-BlankEN \
+  --train_data training/datalist/train.sft.data.list \
+  --cv_data training/datalist/dev.sft.data.list \
   --model slm \
   --checkpoint $stage2_checkpoint/slm.pt \
   --model_dir training/exp/$yaml_name/ \
