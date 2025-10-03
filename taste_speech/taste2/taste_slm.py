@@ -606,7 +606,6 @@ class TasteSLM(nn.Module):
         fused = self.fusing_module(text_token_emb, taste_token_emb, text_token_len, self.delay)
         lm_input = fused[:, :-1 * self.delay, :]  # truncate to text end
         reminding_taste_token_emb = taste_token_emb[:, -1 * self.delay:, :]
-        print(f'!!!!!!!!!{max_len}!!!!!!!!!!!')
         # 5. step by step decode
         for text_token, taste_emb in self.inference_wrapper(lm_input, reminding_taste_token_emb, max_len, min_len, uuid):
             yield (text_token, taste_emb)
