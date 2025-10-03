@@ -18,7 +18,7 @@ from taste_speech.taste2.cosyvoice.cli.frontend import CosyVoiceFrontEnd
 from taste_speech.taste2.cosyvoice.utils.file_utils import logging
 from taste_speech.taste2.cosyvoice.utils.common import fade_in_out
 from taste_speech.taste2.taste2_interface import TASTE2Model
-from taste_speech.taste2.taste_sft_utils import package_message
+from taste_speech.taste2.taste_sft_utils import apply_template_on_message
 
 def print_green(text):
     """Print text in green color"""
@@ -153,8 +153,8 @@ class TASTE2:
         asr_text = text if text else self._run_asr(audio_16k, asr_model_dir)
         text_token, text_token_len = self.frontend._extract_text_token(asr_text)
 
-        # Format text with role tags using package_message
-        formatted_text_token, formatted_text_token_len, token_message_ids = package_message(self.frontend.tokenizer, role, asr_text, stream = True)
+        # Format text with role tags using apply_template_on_message
+        formatted_text_token, formatted_text_token_len, token_message_ids = apply_template_on_message(self.frontend.tokenizer, role, asr_text, stream = True)
 
         # Extract audio features similar to _preprocess
         audio_feature, audio_feature_len = self.audio_extractor(audio_16k, [audio_16k.shape[-1]])

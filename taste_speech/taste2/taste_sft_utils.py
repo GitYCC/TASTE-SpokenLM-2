@@ -129,7 +129,7 @@ def reconstruct_conversations_from_messages(new_taste_embs, new_taste_latents, m
     return full_text_token.to(device), full_text_token_len.to(device), taste_token_emb, taste_latent
 
 
-def package_message(tokenizer, role, asr_text, stream = False):
+def apply_template_on_message(tokenizer, role, asr_text, stream = False):
     """
     Package text into ChatML format with message dimension tracking.
 
@@ -188,7 +188,7 @@ def package_message(tokenizer, role, asr_text, stream = False):
 
 
 
-def unpackage_message(
+def extract_taste_from_message(
     slm,
     taste_token_emb: torch.Tensor,
     formatted_text_token: torch.Tensor,

@@ -22,7 +22,7 @@ from torch.nn.utils.rnn import pad_sequence, unpad_sequence
 
 from taste_speech.taste2.cosyvoice.utils.common import th_accuracy
 from taste_speech.modules_taste.fusion import TTS_INPUT_FUSION_CLASSES
-from taste_speech.taste2.taste_sft_utils import expand_conversations_to_messages, reconstruct_conversations_from_messages, unpackage_message
+from taste_speech.taste2.taste_sft_utils import expand_conversations_to_messages, reconstruct_conversations_from_messages, extract_taste_from_message
 
 # Constants
 IGNORE_ID = -1
@@ -598,7 +598,7 @@ class TasteSLM(nn.Module):
 
         # Reconstruct taste embeddings for SFT mode if needed
         if formatted_text_token is not None and token_message_ids is not None:
-            text_token_emb, taste_token_emb, text_token, text_token_len = unpackage_message(
+            text_token_emb, taste_token_emb, text_token, text_token_len = extract_taste_from_message(
                 self.slm, taste_token_emb, formatted_text_token, formatted_text_token_len, token_message_ids
             )
 
