@@ -18,6 +18,8 @@ from taste_speech.taste2.cosyvoice.cli.frontend import CosyVoiceFrontEnd
 from taste_speech.taste2.cosyvoice.utils.file_utils import logging
 from taste_speech.taste2.cosyvoice.utils.common import fade_in_out
 from taste_speech.taste2.taste2_interface import TASTE2Model
+from taste_speech.taste2.taste_sft_utils import apply_template_on_message
+
 
 def print_green(text):
     """Print text in green color"""
@@ -130,6 +132,53 @@ class TASTE2:
             text_token=text_token.to(self.device),
             text_token_len=text_token_len.to(self.device),
             taste_token_emb=taste_token_emb.to(self.device),
+        )
+
+    def _sft_preprocess(self, audio_16k, text, role="user", asr_model_dir=None):
+        """
+        SFT preprocessing function that formats text with special tokens
+        similar to format_and_concatenate_conversation function
+
+        Args:
+            audio_16k: Input audio tensor
+            text: Text string for the conversation turn
+            role: Role ('system', 'user', 'assistant') for this turn
+            asr_model_dir: Optional ASR model for fallback
+
+        Returns:
+            dict with formatted conversation tokens and features
+        """
+        assert asr_model_dir or text, "Either ASR model or text must be provided"
+
+        # Get text from ASR or use provided text
+        asr_text = text if text else self._run_asr(audio_16k, asr_model_dir)
+        text_token, text_token_len = self.frontend._extract_text_token(asr_text)
+
+        # Format text with role tags using apply_template_on_message
+        formatted_text_token, formatted_text_token_len, token_message_ids = self.apply_template_on_message(role, asr_text)
+
+        # Extract audio features similar to _preprocess
+        audio_feature, audio_feature_len = self.audio_extractor(audio_16k, [audio_16k.shape[-1]])
+
+        # Convert to half precision if model is using fp16
+        if self.fp16:
+            audio_feature = audio_feature.half()
+
+        # Move to correct device
+        audio_feature = audio_feature.to(self.device)
+
+        # Use taste_tokenizer similar to _preprocess
+        taste_tokenizer = self.taste_stage1.taste_tokenizer
+        tokenized = taste_tokenizer(text_token, text_token_len, audio_feature, audio_feature_len)
+        taste_token_emb = tokenized['taste_token_emb']
+
+        return dict(
+            text_token=text_token.to(self.device),
+            text_token_len=text_token_len.to(self.device),
+            taste_token_emb=taste_token_emb.to(self.device),
+            formatted_text_token=formatted_text_token.to(self.device),
+            formatted_text_token_len=formatted_text_token_len.to(self.device),
+            token_message_ids=torch.tensor(token_message_ids).to(self.device),
         )
 
     def _postprocess(self, s3_tokens, audio_16k):

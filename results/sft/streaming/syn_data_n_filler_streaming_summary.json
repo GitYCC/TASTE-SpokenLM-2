@@ -1,0 +1,28 @@
+{
+  "audio_basename": "syn_data_n_filler",
+  "asr_text": " I've heard that some pests can be beneficial to gardens. Can you tell me more about that?",
+  "total_chunks": 16,
+  "chunk_files": [
+    "./results/sft/streaming/syn_data_n_filler_chunk_001.wav",
+    "./results/sft/streaming/syn_data_n_filler_chunk_002.wav",
+    "./results/sft/streaming/syn_data_n_filler_chunk_003.wav",
+    "./results/sft/streaming/syn_data_n_filler_chunk_004.wav",
+    "./results/sft/streaming/syn_data_n_filler_chunk_005.wav",
+    "./results/sft/streaming/syn_data_n_filler_chunk_006.wav",
+    "./results/sft/streaming/syn_data_n_filler_chunk_007.wav",
+    "./results/sft/streaming/syn_data_n_filler_chunk_008.wav",
+    "./results/sft/streaming/syn_data_n_filler_chunk_009.wav",
+    "./results/sft/streaming/syn_data_n_filler_chunk_010.wav",
+    "./results/sft/streaming/syn_data_n_filler_chunk_011.wav",
+    "./results/sft/streaming/syn_data_n_filler_chunk_012.wav",
+    "./results/sft/streaming/syn_data_n_filler_chunk_013.wav",
+    "./results/sft/streaming/syn_data_n_filler_chunk_014.wav",
+    "./results/sft/streaming/syn_data_n_filler_chunk_015.wav",
+    "./results/sft/streaming/syn_data_n_filler_chunk_016.wav"
+  ],
+  "final_crossfaded_path": "./results/sft/streaming/syn_data_n_filler_streaming_final_crossfaded.wav",
+  "single_audio_path": "./results/sft/streaming/syn_data_n_filler_single_from_all_tokens.wav",
+  "ground_truth_text": null,
+  "stage": "sft",
+  "streaming": true
+}
