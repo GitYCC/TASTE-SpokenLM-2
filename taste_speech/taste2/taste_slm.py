@@ -22,7 +22,7 @@ from torch.nn.utils.rnn import pad_sequence, unpad_sequence
 
 from taste_speech.taste2.cosyvoice.utils.common import th_accuracy
 from taste_speech.modules_taste.fusion import TTS_INPUT_FUSION_CLASSES
-from taste_speech.taste2.taste_sft_utils import train_expand, train_reconstruct
+from taste_speech.taste2.taste_sft_utils import expand_conversations_to_messages, reconstruct_conversations_from_messages
 
 # Constants
 IGNORE_ID = -1
@@ -520,7 +520,7 @@ class TasteSLM(nn.Module):
             full_token_message_ids = batch['token_message_ids']  # [B, L]
             
             # Prepare data for taste_stage1 (expand dialogue batch to message batch)
-            text_token, text_token_len, audio_feature, audio_feature_len, message_mapping = train_expand(batch, device)
+            text_token, text_token_len, audio_feature, audio_feature_len, message_mapping = expand_conversations_to_messages(batch, device)
         else:
             # Switch lm_target to pretrain
             lm_input_target_mode = "pretrain"
@@ -539,7 +539,7 @@ class TasteSLM(nn.Module):
         if batch.get('sft_training') is True:
             # Recontruct for slm training (concat message batch to dialogue batch)
             text_token, text_token_len, taste_token_emb, taste_latent = \
-            train_reconstruct(taste_token_emb, taste_latent, message_mapping,
+            reconstruct_conversations_from_messages(taste_token_emb, taste_latent, message_mapping,
                             full_text_token, full_text_token_len, full_token_message_ids,
                             text_token_len, device)
 

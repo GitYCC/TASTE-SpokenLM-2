@@ -4,7 +4,7 @@ from typing import Tuple, Dict, Optional, Callable, Generator
 from torch.nn.utils.rnn import pad_sequence, unpad_sequence
 
 
-def train_expand(batch, device):
+def expand_conversations_to_messages(batch, device):
     full_text_token = batch['text_token']  # [B, L] - conversations with padded text tokens
     full_audio_feature = batch['audio_feature'].to(dtype=torch.float16)  # [B, M, L, D] - convert to float16 early
     full_audio_feature_lens = batch['audio_feature_lens']  # [B, M] - lengths of audio features for each message
@@ -67,7 +67,7 @@ def train_expand(batch, device):
     
     
     
-def train_reconstruct(new_taste_embs, new_taste_latents, message_mapping,
+def reconstruct_conversations_from_messages(new_taste_embs, new_taste_latents, message_mapping,
                      full_text_token, full_text_token_len, full_token_message_ids,
                      new_text_token_len, device):
     """Reconstruct taste_token_emb and taste_latent using saved mapping
