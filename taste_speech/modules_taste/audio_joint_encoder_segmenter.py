@@ -5,7 +5,6 @@ import logging
 import os
 
 import numpy as np
-import matplotlib.pyplot as plt
 from hyperpyyaml import load_hyperpyyaml
 import librosa
 import torchaudio
@@ -168,7 +167,7 @@ class WhisperAudioEncoderForJoint(BaseAudioEncoder):
                 input_features = F.pad(input_features, p1d, 'constant', 0.0)
             else:
                 raise ValueError(
-                    f"Whisper expects the mel input features to be of length {expected_seq_length}, but found {input_features.shape[-1]}. Make sure to pad the input mel features to {expected_seq_length}."
+                    f"Whisper expects the mel input features to be of length {self.expected_seq_length}, but found {input_features.shape[-1]}. Make sure to pad the input mel features to {self.expected_seq_length}."
                 )
 
         inputs_embeds = nn.functional.gelu(self.encoder.conv1(input_features))
@@ -509,6 +508,7 @@ class WhisperAudioJointEncoderSegmenter(BaseAudioJointEncoderSegmenter):
 
 
 def draw_attn_map(attn_map, output_fpath, token_ids):
+    import matplotlib.pyplot as plt
     x_size, y_size = attn_map.shape
     plt.figure(figsize=(10, 8))
     plt.imshow(attn_map.T, aspect='auto', origin='lower', interpolation='none', cmap='viridis')

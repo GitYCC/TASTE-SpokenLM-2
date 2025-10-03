@@ -243,6 +243,15 @@ class Qwen2Encoder(torch.nn.Module):
             if lora_config['lora_target_linear']:
                 linear_names = _find_all_linear_names(self.model)
                 lora_target_modules = list(set(lora_target_modules + linear_names))
+
+            # Find and print all embedding layers
+
+            if lora_config['lora_mode'] == 'sft':
+                # Standard LoRA for all embed_tokens
+                if 'embed_tokens' not in lora_target_modules:
+                    lora_target_modules.append('embed_tokens')
+                self.use_selective_embedding = False
+                
             lora_config = LoraConfig(
                 r=lora_config['lora_r'],
                 lora_alpha=lora_config['lora_alpha'],
@@ -255,6 +264,7 @@ class Qwen2Encoder(torch.nn.Module):
                 task_type="CAUSAL_LM",
             )
             self.model = get_peft_model(self.model, lora_config)
+
 
     def forward_embed_tokens(self, text_token):
         if self._use_lora:
