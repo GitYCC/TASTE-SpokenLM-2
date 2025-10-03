@@ -5,7 +5,6 @@ import logging
 import os
 
 import numpy as np
-import matplotlib.pyplot as plt
 from hyperpyyaml import load_hyperpyyaml
 import librosa
 import torchaudio
@@ -509,6 +508,7 @@ class WhisperAudioJointEncoderSegmenter(BaseAudioJointEncoderSegmenter):
 
 
 def draw_attn_map(attn_map, output_fpath, token_ids):
+    import matplotlib.pyplot as plt
     x_size, y_size = attn_map.shape
     plt.figure(figsize=(10, 8))
     plt.imshow(attn_map.T, aspect='auto', origin='lower', interpolation='none', cmap='viridis')
