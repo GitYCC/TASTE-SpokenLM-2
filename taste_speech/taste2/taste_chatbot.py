@@ -67,15 +67,12 @@ class TASTE2Chatbot:
         Yields:
             tuple: (text_token, taste_emb) pairs from SLM generation
         """
-        print(f"Starting streaming SLM generation (stage {self.stage})...")
 
-        if self.stage not in [2, 'sft']:
-            raise ValueError(f"Generate function requires stage 2 or sft, but got stage {self.stage}")
 
         # Prepare data for SLM inference
-        text_token = session_buffer["text_tokens"]
-        text_token_len = len(session_buffer["text_tokens"])
-        taste_token_emb = ["taste_tokens"]
+        text_token = input_buffer["text_tokens"]
+        text_token_len = len(input_buffer["text_tokens"])
+        taste_token_emb = input_buffer["taste_tokens"]
         
         data = {
             'text_token': text_token.to(self.device),
@@ -93,12 +90,65 @@ class TASTE2Chatbot:
 
         print("Starting to yield SLM outputs...")
         output_count = 0
+        found_newline = False
+        detected_pattern = False
+        skip_count = 0
+        last_token_was_newline = False
+
         for output in slm_output_generator:
             output_count += 1
-            print(f"Yielding SLM output #{output_count}: {type(output)}")
-            yield output
 
-    def detokenize(self, slm_generator, audio_16k, sampling=25, stream_audio=True):
+            # Get the token ID from output
+            token_id = output['text_token'].item()
+            token_str = self.model.tokenizer.decode([token_id])
+
+            # First check: detect newline
+            if output_count == 1:
+                if token_str == "\n":
+                    found_newline = True
+                    print("Detected \\n as first token")
+                else:
+                    # First token is not \n, yield None
+                    print(f"First token not \\n: {token_str}, yielding None")
+
+            # Second check: only if newline was found
+            elif output_count == 2 and found_newline:
+                if token_str == "<|im_end|>":
+                    detected_pattern = True
+                    skip_count += 5  # Skip next 5 tokens: \n, <|im_end|>, <|im_start|>, role, \n
+                    print("Detected consecutive \\n followed by <|im_end|>, will skip next 5 tokens")
+                else:
+                    # Second token is not <|im_end|>, yield None
+                    detected_pattern = False
+                    print(f"Second token not <|im_end|>: {token_str}, yielding None")
+
+            if detected_pattern:
+                # Skip the pattern tokens
+                if skip_count > 0:
+                    skip_count -= 1
+                    continue
+
+                # Continuously check for \n + <|im_end|> pattern during generation
+                if last_token_was_newline and token_str == "<|im_end|>":
+                    print("Detected \\n + <|im_end|> during generation, stopping")
+                    return
+
+                # Track if current token is newline for next iteration
+                last_token_was_newline = (token_str == "\n")
+
+                # After skipping, yield normal outputs
+                yield output
+            elif found_newline:
+                skip_count -= 1
+                continue # Still waiting for the second token check
+            else:
+                yield None
+                print("Pattern not detected, stopping generation")
+                return
+            
+        
+
+    def detokenize(self, slm_generator, audio_16k, sampling=25):
         """
         Streaming detokenize function that converts SLM output to ready-to-play audio
 
@@ -139,56 +189,38 @@ class TASTE2Chatbot:
             sampling=sampling,
         )
 
-        if stream_audio:
-            # Stream audio chunks as s3 tokens come in (chunk-by-chunk)
-            print("Starting streaming audio generation...")
-            s3_tokens_buffer = []
-            chunk_size = 20  # Process every N s3 tokens
+        # Stream audio chunks as s3 tokens come in (chunk-by-chunk)
+        print("Starting streaming audio generation...")
+        s3_tokens_buffer = []
+        chunk_size = 20  # Process every N s3 tokens
 
-            for s3_token in s3_token_generator:
-                s3_tokens_buffer.append(s3_token)
-                print(f"Collected s3 token: {s3_token} (buffer size: {len(s3_tokens_buffer)})")
+        for s3_token in s3_token_generator:
+            s3_tokens_buffer.append(s3_token)
+            print(f"Collected s3 token: {s3_token} (buffer size: {len(s3_tokens_buffer)})")
 
-                # Convert tokens to audio when buffer reaches chunk_size
-                if len(s3_tokens_buffer) >= chunk_size:
-                    s3_tokens_tensor = torch.tensor(s3_tokens_buffer, dtype=torch.long).unsqueeze(0)
-                    print(f"Converting {len(s3_tokens_buffer)} s3 tokens to audio...")
-
-                    # Use TTS to convert s3 tokens to audio
-                    for audio_chunk in self.model.tts(
-                        source_speech_token=s3_tokens_tensor,
-                        flow_embedding=speaker_embedding
-                    ):
-                        print(f"Yielding audio chunk: {audio_chunk['tts_speech'].shape}")
-                        yield audio_chunk['tts_speech']
-
-                    s3_tokens_buffer.clear()
-
-            # Process remaining tokens
-            if s3_tokens_buffer:
+            # Convert tokens to audio when buffer reaches chunk_size
+            if len(s3_tokens_buffer) >= chunk_size:
                 s3_tokens_tensor = torch.tensor(s3_tokens_buffer, dtype=torch.long).unsqueeze(0)
-                print(f"Converting final {len(s3_tokens_buffer)} s3 tokens to audio...")
+                print(f"Converting {len(s3_tokens_buffer)} s3 tokens to audio...")
 
+                # Use TTS to convert s3 tokens to audio
                 for audio_chunk in self.model.tts(
                     source_speech_token=s3_tokens_tensor,
                     flow_embedding=speaker_embedding
                 ):
-                    print(f"Yielding final audio chunk: {audio_chunk['tts_speech'].shape}")
+                    print(f"Yielding audio chunk: {audio_chunk['tts_speech'].shape}")
                     yield audio_chunk['tts_speech']
 
-        else:
-            # Collect all s3 tokens first, then convert to audio
-            print("Collecting all s3 tokens first...")
-            all_s3_tokens = list(s3_token_generator)
+                s3_tokens_buffer.clear()
 
-            if all_s3_tokens:
-                s3_tokens_tensor = torch.tensor(all_s3_tokens, dtype=torch.long).unsqueeze(0)
-                print(f"Converting all {len(all_s3_tokens)} s3 tokens to audio...")
+        # Process remaining tokens
+        if s3_tokens_buffer:
+            s3_tokens_tensor = torch.tensor(s3_tokens_buffer, dtype=torch.long).unsqueeze(0)
+            print(f"Converting final {len(s3_tokens_buffer)} s3 tokens to audio...")
 
-                # Use TTS to convert all s3 tokens to audio
-                for audio_chunk in self.model.tts(
-                    source_speech_token=s3_tokens_tensor,
-                    flow_embedding=speaker_embedding
-                ):
-                    print(f"Yielding complete audio: {audio_chunk['tts_speech'].shape}")
-                    yield audio_chunk['tts_speech']
+            for audio_chunk in self.model.tts(
+                source_speech_token=s3_tokens_tensor,
+                flow_embedding=speaker_embedding
+            ):
+                print(f"Yielding final audio chunk: {audio_chunk['tts_speech'].shape}")
+                yield audio_chunk['tts_speech']
