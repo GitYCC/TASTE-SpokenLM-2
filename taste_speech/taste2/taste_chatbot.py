@@ -17,20 +17,23 @@ class TASTE2Chatbot:
         self.audio_extractor = self.model.audio_extractor  # Needed for preprocessing
         self.sample_rate = self.model.sample_rate  # Needed for audio processing
 
-    def tokenize(self, text_token, text_token_len, audio_feature, audio_feature_len):
+    def taste_tokenize(self, text_token, text_token_len, audio):
         """
-        Streaming tokenize function that yields individual (text_token, taste_emb) pairs
+        Tokenize function that converts audio to features and generates TASTE embeddings
 
         Args:
             text_token: Text token tensor
             text_token_len: Text token length tensor
-            audio_feature: Audio feature tensor
-            audio_feature_len: Audio feature length tensor
+            audio: Audio tensor to be processed
 
         Yields:
-            tuple: (text_token, taste_emb) pairs for each token position
+            tuple: (text_token, taste_token_emb) - full tensors (not streaming)
         """
-        print("Starting streaming tokenization...")
+        print("Starting TASTE tokenization...")
+
+        # Extract audio features using audio_extractor
+        audio_feature, audio_feature_len = self.audio_extractor.extract_feature(audio)
+        print(f"Extracted audio feature shape: {audio_feature.shape}, length: {audio_feature_len}")
 
         # Get the taste tokenizer from stage1
         taste_tokenizer = self.taste_stage1.taste_tokenizer
@@ -40,17 +43,9 @@ class TASTE2Chatbot:
         taste_token_emb = tokenized['taste_token_emb']  # Shape: [1, seq_len, emb_dim]
 
         print(f"TASTE token embedding shape: {taste_token_emb.shape}")
-        seq_len = text_token.shape[1]
 
-        # Stream individual token pairs
-        for i in range(seq_len):
-            # Extract individual token and embedding
-            single_text_token = text_token[:, i:i+1]  # [1, 1]
-            single_taste_emb = taste_token_emb[:, i:i+1, :]  # [1, 1, emb_dim]
-
-            print(f"Yielding token pair {i+1}/{seq_len}: text_token={single_text_token.item()}, taste_emb_shape={single_taste_emb.shape}")
-
-            yield (single_text_token, single_taste_emb)
+        # Yield the full text_token and taste_token_emb (no streaming)
+        yield text_token, taste_token_emb
 
     def streaming_generate(self, input_buffer, min_len=3, max_len=20, sampling=25):
         """
@@ -131,6 +126,7 @@ class TASTE2Chatbot:
                 # Continuously check for \n + <|im_end|> pattern during generation
                 if last_token_was_newline and token_str == "<|im_end|>":
                     print("Detected \\n + <|im_end|> during generation, stopping")
+                    yield False, False
                     return
 
                 # Track if current token is newline for next iteration
@@ -140,9 +136,10 @@ class TASTE2Chatbot:
                 yield output
             elif found_newline:
                 skip_count -= 1
+                yield True,True
                 continue # Still waiting for the second token check
             else:
-                yield None
+                yield None, None
                 print("Pattern not detected, stopping generation")
                 return
             
