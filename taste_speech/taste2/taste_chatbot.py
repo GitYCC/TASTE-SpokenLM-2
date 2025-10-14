@@ -145,7 +145,7 @@ class TASTE2Chatbot:
             
         
 
-    def detokenize(self, slm_generator, audio_16k, sampling=25):
+    def taste_detokenize(self, slm_generator, audio_16k, sampling=25):
         """
         Streaming detokenize function that converts SLM output to ready-to-play audio
 
@@ -158,6 +158,13 @@ class TASTE2Chatbot:
         Yields:
             torch.Tensor: Audio chunks ready to play
         """
+        
+        '''
+        BELOW CODE is just a copy paste version from /mnt/shared/p01/wilz/TASTE-SpokenLM-2/scripts/generate_audio_stream.py sft straming function
+        The objective is to use neew input (text,taste) token pairs to generate audio
+        TODO: define what is slm_generator in the chatbot repo, audio_16k is also misssing
+        slm_generator is a thind proveide (text,taste) token pairs for taste_stage1.inference_bistream
+        '''
         print("Starting streaming detokenization to audio using bistream inference + TTS...")
 
         # Extract speaker embedding from reference audio
@@ -189,8 +196,14 @@ class TASTE2Chatbot:
         # Stream audio chunks as s3 tokens come in (chunk-by-chunk)
         print("Starting streaming audio generation...")
         s3_tokens_buffer = []
-        chunk_size = 20  # Process every N s3 tokens
+        chunk_size = 20  # Process every N s3 tokens 
 
+        ''' 
+        TODO: In below logic is uisg s3 token genreator to generate s3 token and accumalate s3 token chunk_size = 20 then generate audio
+        But we need to yield something out to the chat bot so the chat bot can keep consume new (text,taste) token pairs.
+        There's a edge case the s3 token in rabbit mq are all be consumee but left chunk is < 20, the remain s3 need to be generate to audio too 
+        So how to detect the edge case and how to solve the edge case is needed
+        '''
         for s3_token in s3_token_generator:
             s3_tokens_buffer.append(s3_token)
             print(f"Collected s3 token: {s3_token} (buffer size: {len(s3_tokens_buffer)})")
