@@ -1,0 +1,307 @@
+# set random seed, so that you may reproduce your result.
+__set_seed1: !apply:random.seed [6534]
+__set_seed2: !apply:numpy.random.seed [6534]
+__set_seed3: !apply:torch.manual_seed [6534]
+__set_seed4: !apply:torch.cuda.manual_seed_all [6534]
+
+# fixed params
+sample_rate: 24000
+llm_input_size: 896
+llm_output_size: 896
+slm_input_size: 3584
+slm_output_size: 3584
+spk_embed_dim: 192
+codebook_dim: 256
+qwen_pretrain_path: '/mnt/shared/p01/yc/models/TASTE2-8B-ZH/CosyVoice-BlankEN'
+qwen_pretrain_path_for_slm: ''
+qwen_pretrain_path_for_slm_7b: '/mnt/shared/p01/yc/models/TASTE2-8B-ZH/qwen2-7b'
+taste_tokenizer_backbond_path: '/mnt/shared/p01/yc/models/TASTE2-8B-ZH/distil-whisper'
+path_reload_taste_stage1: ''
+token_frame_rate: 25
+token_mel_ratio: 2
+attn_implementation: 'eager' #'sdpa'
+max_frames_in_batch: 1000 # original: 2000
+accum_grad: 2 # original: 2
+lr: 1e-5
+save_per_step: 1000  # production: 10000
+wandb_run_name: "251008-sft-emb-zh"
+
+# stream related params
+chunk_size: 25 # streaming inference chunk size, in token
+num_decoding_left_chunks: -1 # streaming inference flow decoder left chunk size, <0 means use all left chunks
+
+# model params
+# for all class/function included in this repo, we use !<name> or !<new> for intialization, so that user may find all corresponding class/function according to one single yaml.
+# for system/third_party class/function, we do not require this.
+llm: !new:taste_speech.taste2.taste_decoder.TasteS3GenerationLM
+    llm_input_size: !ref <llm_input_size>
+    llm_output_size: !ref <llm_output_size>
+    speech_token_size: 6561
+    length_normalized_loss: True
+    lsm_weight: 0
+    mix_ratio: [5, 15]
+    llm: !new:taste_speech.taste2.cosyvoice.llm.llm.Qwen2Encoder
+        pretrain_path: !ref <qwen_pretrain_path>
+    taste_tokenizer: !new:taste_speech.taste2.taste_tokenizer.TasteTokenizer
+        backbond_name_or_path: !ref <taste_tokenizer_backbond_path>
+        whisper_decoder_embed_dim: 1280
+        encoder_input_size: !ref <llm_input_size>
+        quantization_on: True
+        kwargs_for_quantizer:
+            codebook_dim: !ref <codebook_dim>  
+            codebook_size: 512
+            decay: 0.99
+            dim: !ref <llm_input_size>
+            kmeans_init: True
+            kmeans_iters: 100
+            num_quantizers: 4
+            quantize_dropout: True
+    taste_decoder_mixer: !new:taste_speech.taste2.taste_decoder_mixer.TasteDecoderMixer
+        class_name: 'weighted_sum'
+    sampling: !name:taste_speech.taste2.cosyvoice.utils.common.ras_sampling
+        top_p: 0.8
+        top_k: 25
+        win_size: 10
+        tau_r: 0.1
+
+slm: !new:taste_speech.taste2.taste_slm.TasteSLM
+    llm_input_size: !ref <slm_input_size>
+    llm_output_size: !ref <slm_output_size>
+    d: !ref <codebook_dim>  
+    taste_stage1: !ref <llm>
+    path_reload_taste_stage1: !ref <path_reload_taste_stage1>
+    slm: !new:taste_speech.taste2.cosyvoice.llm.llm.Qwen2Encoder
+        pretrain_path: !ref <qwen_pretrain_path_for_slm_7b>
+        attn_implementation: !ref <attn_implementation>
+        use_lora: true
+        lora_config:
+            lora_model_dir: null
+            lora_r: 64
+            lora_alpha: 128
+            lora_dropout: 0.05
+            lora_target_linear: true
+            lora_target_modules: null
+            lora_fan_in_fan_out: null
+            lora_modules_to_save: null
+            # --
+            lora_mode: 'sft' # new for sft
+    fusing_module: !new:taste_speech.taste2.taste_slm.TasteSLMFusing
+        tokenizer_output_size: !ref <llm_output_size>
+        llm_input_size: !ref <slm_input_size>
+        class_name: 'weighted_sum'
+        fuse_config:
+            weight_init_type: 'zero_audio'
+    out_module: !new:taste_speech.taste2.taste_slm.TasteSLMOut
+        llm_output_size: !ref <slm_output_size>
+        text_vocab_size: 152064  # Qwen2 8B vocab size (diff from 0.5B/1.5B: 151936)
+        d: !ref <codebook_dim>
+        fc_mu_requires_bias: true
+        b_logvar_is_linear: false
+        conduct_reparameterization: true
+    delay: 1
+    ignore_id: -1
+    eos_token_id: 151643
+    text_sampling_callable: !name:taste_speech.taste2.cosyvoice.utils.common.nucleus_sampling
+        top_p: 0.8
+        top_k: 25
+    
+
+flow: !new:taste_speech.taste2.cosyvoice.flow.flow.CausalMaskedDiffWithXvec
+    input_size: 512
+    output_size: 80
+    spk_embed_dim: !ref <spk_embed_dim>
+    output_type: 'mel'
+    vocab_size: 6561
+    input_frame_rate: !ref <token_frame_rate>
+    only_mask_loss: True
+    token_mel_ratio: !ref <token_mel_ratio>
+    pre_lookahead_len: 3
+    encoder: !new:taste_speech.taste2.cosyvoice.transformer.upsample_encoder.UpsampleConformerEncoder
+        output_size: 512
+        attention_heads: 8
+        linear_units: 2048
+        num_blocks: 6
+        dropout_rate: 0.1
+        positional_dropout_rate: 0.1
+        attention_dropout_rate: 0.1
+        normalize_before: True
+        input_layer: 'linear'
+        pos_enc_layer_type: 'rel_pos_espnet'
+        selfattention_layer_type: 'rel_selfattn'
+        input_size: 512
+        use_cnn_module: False
+        macaron_style: False
+        static_chunk_size: !ref <chunk_size>
+    decoder: !new:taste_speech.taste2.cosyvoice.flow.flow_matching.CausalConditionalCFM
+        in_channels: 240
+        n_spks: 1
+        spk_emb_dim: 80
+        cfm_params: !new:omegaconf.DictConfig
+            content:
+                sigma_min: 1e-06
+                solver: 'euler'
+                t_scheduler: 'cosine'
+                training_cfg_rate: 0.2
+                inference_cfg_rate: 0.7
+                reg_loss_type: 'l1'
+        estimator: !new:taste_speech.taste2.cosyvoice.flow.decoder.CausalConditionalDecoder
+            in_channels: 320
+            out_channels: 80
+            channels: [256]
+            dropout: 0.0
+            attention_head_dim: 64
+            n_blocks: 4
+            num_mid_blocks: 12
+            num_heads: 8
+            act_fn: 'gelu'
+            static_chunk_size: !ref <chunk_size> * <token_mel_ratio>
+            num_decoding_left_chunks: !ref <num_decoding_left_chunks>
+
+hift: !new:taste_speech.taste2.cosyvoice.hifigan.generator.HiFTGenerator
+    in_channels: 80
+    base_channels: 512
+    nb_harmonics: 8
+    sampling_rate: !ref <sample_rate>
+    nsf_alpha: 0.1
+    nsf_sigma: 0.003
+    nsf_voiced_threshold: 10
+    upsample_rates: [8, 5, 3]
+    upsample_kernel_sizes: [16, 11, 7]
+    istft_params:
+        n_fft: 16
+        hop_len: 4
+    resblock_kernel_sizes: [3, 7, 11]
+    resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+    source_resblock_kernel_sizes: [7, 7, 11]
+    source_resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+    lrelu_slope: 0.1
+    audio_limit: 0.99
+    f0_predictor: !new:taste_speech.taste2.cosyvoice.hifigan.f0_predictor.ConvRNNF0Predictor
+        num_class: 1
+        in_channels: 80
+        cond_channels: 512
+
+# gan related module
+mel_spec_transform1: !name:taste_speech.taste2.matcha.utils.audio.mel_spectrogram
+    n_fft: 1920
+    num_mels: 80
+    sampling_rate: !ref <sample_rate>
+    hop_size: 480
+    win_size: 1920
+    fmin: 0
+    fmax: null
+    center: False
+hifigan: !new:taste_speech.taste2.cosyvoice.hifigan.hifigan.HiFiGan
+    generator: !ref <hift>
+    discriminator: !new:taste_speech.taste2.cosyvoice.hifigan.discriminator.MultipleDiscriminator
+        mpd: !new:taste_speech.taste2.matcha.hifigan.models.MultiPeriodDiscriminator
+        mrd: !new:taste_speech.taste2.cosyvoice.hifigan.discriminator.MultiResSpecDiscriminator
+    mel_spec_transform: [
+        !ref <mel_spec_transform1>
+    ]
+
+# sft_processor functions
+sft_parquet_opener: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.sft_parquet_opener
+expand_sft_conversations: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.expand_sft_conversations
+get_tokenizer: !name:taste_speech.taste2.cosyvoice.tokenizer.tokenizer.get_qwen_tokenizer
+    token_path: !ref <qwen_pretrain_path>
+    skip_special_tokens: True
+allowed_special: 'all'
+tokenize: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.tokenize
+    get_tokenizer: !ref <get_tokenizer>
+    allowed_special: !ref <allowed_special>
+filter: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.filter
+    max_length: 40960
+    min_length: 100
+    token_max_length: 200
+    token_min_length: 1
+resample: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.resample
+    resample_rate: !ref <sample_rate>
+audio_extractor: !new:taste_speech.modules_taste.cosyvoice.whisper_frontend.WhisperFrontend
+    whisper_model: large-v3
+    do_pad_trim: True
+    permute: True
+extract_audio: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.extract_audio
+    audio_extractor: !ref <audio_extractor>
+    target_sample_rate: 16_000
+feat_extractor: !name:taste_speech.taste2.matcha.utils.audio.mel_spectrogram
+    n_fft: 1920
+    num_mels: 80
+    sampling_rate: !ref <sample_rate>
+    hop_size: 480
+    win_size: 1920
+    fmin: 0
+    fmax: 8000
+    center: False
+compute_fbank: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.compute_fbank
+    feat_extractor: !ref <feat_extractor>
+    token_mel_ratio: 2
+format_and_concatenate_conversation: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.format_and_concatenate_conversation
+    get_tokenizer: !ref <get_tokenizer>
+shuffle: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.shuffle
+    shuffle_size: 1000
+sort: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.sort
+    sort_size: 500  # sort_size should be less than shuffle_size
+batch: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.batch
+    batch_type: 'dynamic'
+    max_frames_in_batch: !ref <max_frames_in_batch> 
+padding_sft: !name:taste_speech.taste2.cosyvoice.dataset.sft_processor.padding_sft
+
+# dataset sft_processor pipeline for SFT conversation training
+data_pipeline: [
+    !ref <sft_parquet_opener>,
+    !ref <expand_sft_conversations>, # Process conversation-style data and set sft_training flag
+    !ref <tokenize>,
+    !ref <filter>,
+    !ref <extract_audio>, # added for audio branch, NOTE: should be in front of resample and compute fbank!!
+    !ref <resample>,
+    !ref <compute_fbank>,
+    !ref <format_and_concatenate_conversation>,
+    !ref <shuffle>,
+    !ref <sort>,
+    !ref <batch>,
+    !ref <padding_sft>, # Use SFT-specific padding for conversation data
+]
+
+# llm flow train conf
+train_conf:
+    optim: adam
+    optim_conf:
+        lr: !ref <lr>  # change to 1e-5 during sft
+    scheduler: constantlr # change to constantlr during sft
+    scheduler_conf:
+        warmup_steps: 1000
+    max_epoch: 200
+    grad_clip: 5
+    accum_grad: !ref <accum_grad> 
+    log_interval: 100
+    save_per_step: !ref <save_per_step> 
+    
+    # wandb logging configuration
+    use_wandb: true  # set to true to enable wandb logging
+    wandb_project: "sft-training"
+    wandb_entity: "TASTE"  # set to your wandb entity/team name
+    wandb_run_name: !ref <wandb_run_name>  # set to custom run name or leave null for auto-generation
+    wandb_tags: "sft"  # comma-separated tags for organizing experiments
+
+# parameter freezing configuration
+freeze_params:
+    enabled: true  # set to false to disable parameter freezing
+    patterns:
+        - "taste_stage1\\..+"
+
+# gan train conf
+train_conf_gan:
+    optim: adam
+    optim_conf:
+        lr: 0.0002 # use small lr for gan training
+    scheduler: constantlr
+    optim_d: adam
+    optim_conf_d:
+        lr: 0.0002 # use small lr for gan training
+    scheduler_d: constantlr
+    max_epoch: 200
+    grad_clip: 5
+    accum_grad: 1 # in gan training, accum_grad must be 1
+    log_interval: 100
+    save_per_step: -1
