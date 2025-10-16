@@ -1,4 +1,6 @@
 import torch
+import torchaudio
+
 from taste_speech.taste2.taste2_interface import TASTE2Model
 
 
@@ -17,7 +19,7 @@ class TASTE2Chatbot:
         self.audio_extractor = self.model.audio_extractor  # Needed for preprocessing
         self.sample_rate = self.model.sample_rate  # Needed for audio processing
 
-    def taste_tokenize(self, text_token, text_token_len, audio):
+    def taste_tokenize(self, text_token, text_token_len, audio, sample_rate=16000):
         """
         Tokenize function that converts audio to features and generates TASTE embeddings
 
@@ -29,23 +31,47 @@ class TASTE2Chatbot:
         Yields:
             tuple: (text_token, taste_token_emb) - full tensors (not streaming)
         """
-        print("Starting TASTE tokenization...")
 
         # Extract audio features using audio_extractor
-        audio_feature, audio_feature_len = self.audio_extractor.extract_feature(audio)
+        # Convert to mono and resample to 16kHz
+        if audio.dim() > 1:
+            audio_16k = audio.mean(dim=0, keepdim=True)
+        else:
+            audio_16k = audio.unsqueeze(0)
+
+        if sample_rate != 16000:
+            audio_16k = torchaudio.transforms.Resample(sample_rate, 16000)(audio_16k)
+
+        audio_feature, audio_feature_len = self.model.audio_extractor(audio_16k, [audio_16k.shape[-1]])
+
+        # Convert to half precision if model is using fp16
+        if self.model.fp16:
+            audio_feature = audio_feature.half()
+
+        # Move to correct device
+        audio_feature = audio_feature.to(self.model.device)
         print(f"Extracted audio feature shape: {audio_feature.shape}, length: {audio_feature_len}")
 
         # Get the taste tokenizer from stage1
         taste_tokenizer = self.taste_stage1.taste_tokenizer
 
-        # Tokenize using the TASTE tokenizer to get full embeddings
-        tokenized = taste_tokenizer(text_token, text_token_len, audio_feature, audio_feature_len)
-        taste_token_emb = tokenized['taste_token_emb']  # Shape: [1, seq_len, emb_dim]
+        # Tokenize using the TASTE tokenizer
+        # Only use autocast if model is in fp16 mode
+        if self.model.fp16:
+            with torch.cuda.amp.autocast(enabled=True, dtype=torch.float16):
+                tokenized = taste_tokenizer(text_token, text_token_len, audio_feature, audio_feature_len)
+                taste_token = tokenized['quantized_indices']
+                taste_token_emb = tokenized['taste_token_emb']  # Shape: [1, seq_len, emb_dim]
+        else:
+            # Use float32 (no autocast)
+            tokenized = taste_tokenizer(text_token, text_token_len, audio_feature, audio_feature_len)
+            taste_token = tokenized['quantized_indices']
+            taste_token_emb = tokenized['taste_token_emb']  # Shape: [1, seq_len, emb_dim]
 
         print(f"TASTE token embedding shape: {taste_token_emb.shape}")
 
         # Yield the full text_token and taste_token_emb (no streaming)
-        yield text_token, taste_token_emb
+        return (text_token, taste_token, taste_token_emb)
 
     def streaming_generate(self, input_buffer, min_len=3, max_len=20, sampling=25):
         """
