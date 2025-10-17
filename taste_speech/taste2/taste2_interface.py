@@ -11,9 +11,11 @@ from huggingface_hub import snapshot_download as hf_snapshot_download
 
 from taste_speech.taste2.cosyvoice.cli.frontend import CosyVoiceFrontEnd
 from taste_speech.taste2.cosyvoice.utils.file_utils import logging
+from taste_speech.taste2.cosyvoice.cli.model import CosyVoice2Model
+from taste_speech.taste2.cosyvoice.utils.common import fade_in_out
 
 
-class TASTE2Model:
+class TASTE2Model(CosyVoice2Model):
     """Complete TASTE2 Model with full initialization, checkpoint loading, and inference capabilities"""
 
     def __init__(self, model_dir, stage=1, load_jit=False, load_trt=False, load_vllm=False, fp16=False, trt_concurrent=1):
@@ -87,6 +89,7 @@ class TASTE2Model:
         self.llm_context = torch.cuda.stream(torch.cuda.Stream(self.device)) if torch.cuda.is_available() else nullcontext()
         self.lock = threading.Lock()
         self.session_data = {}
+        self.hift_cache_dict = {}
 
         # Load model weights
         self._load_checkpoints(model_dir, stage)
@@ -158,56 +161,41 @@ class TASTE2Model:
             self.session_data[session_id]['tokens'] = source_token.flatten().tolist()
         self.session_data[session_id]['finished'] = True
 
-    def token2wav(self, token, prompt_token, prompt_feat, embedding, session_id, token_offset=0, finalize=True, speed=1.0):
-        """Convert tokens to waveform"""
+    def token2wav(self, token, prompt_token, prompt_feat, embedding, token_offset, uuid, stream=False, finalize=False, speed=1.0):
+        if uuid not in self.hift_cache_dict:
+            self.hift_cache_dict[uuid] = None
+
         with torch.cuda.amp.autocast(self.fp16):
-            tts_mel, _ = self.flow.inference(
-                token=token.to(self.device),
-                token_len=torch.tensor([token.shape[1]], dtype=torch.int32).to(self.device),
-                prompt_token=prompt_token.to(self.device),
-                prompt_token_len=torch.tensor([prompt_token.shape[1]], dtype=torch.int32).to(self.device),
-                prompt_feat=prompt_feat.to(self.device),
-                prompt_feat_len=torch.tensor([prompt_feat.shape[1]], dtype=torch.int32).to(self.device),
-                embedding=embedding.to(self.device),
-                streaming=False,
-                finalize=finalize
-            )
-
-        if speed != 1.0 and finalize:
-            tts_mel = F.interpolate(tts_mel, size=int(tts_mel.shape[2] / speed), mode='linear')
-
-        tts_speech, _ = self.hift.inference(speech_feat=tts_mel, cache_source=torch.zeros(1, 1, 0))
+            tts_mel, _ = self.flow.inference(token=token.to(self.device),
+                                             token_len=torch.tensor([token.shape[1]], dtype=torch.int32).to(self.device),
+                                             prompt_token=prompt_token.to(self.device),
+                                             prompt_token_len=torch.tensor([prompt_token.shape[1]], dtype=torch.int32).to(self.device),
+                                             prompt_feat=prompt_feat.to(self.device),
+                                             prompt_feat_len=torch.tensor([prompt_feat.shape[1]], dtype=torch.int32).to(self.device),
+                                             embedding=embedding.to(self.device),
+                                             streaming=stream,
+                                             finalize=finalize)
+        tts_mel = tts_mel[:, :, token_offset * self.flow.token_mel_ratio:]
+        # append hift cache
+        if self.hift_cache_dict[uuid] is not None:
+            hift_cache_mel, hift_cache_source = self.hift_cache_dict[uuid]['mel'], self.hift_cache_dict[uuid]['source']
+            tts_mel = torch.concat([hift_cache_mel, tts_mel], dim=2)
+        else:
+            hift_cache_source = torch.zeros(1, 1, 0)
+        # keep overlap mel and hift cache
+        if finalize is False:
+            tts_speech, tts_source = self.hift.inference(speech_feat=tts_mel, cache_source=hift_cache_source)
+            if self.hift_cache_dict[uuid] is not None:
+                tts_speech = fade_in_out(tts_speech, self.hift_cache_dict[uuid]['speech'], self.speech_window)
+            self.hift_cache_dict[uuid] = {'mel': tts_mel[:, :, -self.mel_cache_len:],
+                                          'source': tts_source[:, :, -self.source_cache_len:],
+                                          'speech': tts_speech[:, -self.source_cache_len:]}
+            tts_speech = tts_speech[:, :-self.source_cache_len]
+        else:
+            if speed != 1.0:
+                assert self.hift_cache_dict[uuid] is None, 'speed change only support non-stream inference mode'
+                tts_mel = F.interpolate(tts_mel, size=int(tts_mel.shape[2] / speed), mode='linear')
+            tts_speech, tts_source = self.hift.inference(speech_feat=tts_mel, cache_source=hift_cache_source)
+            if self.hift_cache_dict[uuid] is not None:
+                tts_speech = fade_in_out(tts_speech, self.hift_cache_dict[uuid]['speech'], self.speech_window)
         return tts_speech
-
-    def tts(self, source_speech_token=torch.zeros(1, 0, dtype=torch.int32), flow_embedding=torch.zeros(0, 192), speed=1.0, **kwargs):
-        """Simplified TTS generation for reconstruction"""
-        session_id = str(uuid.uuid1())
-
-        with self.lock:
-            self.session_data[session_id] = {'tokens': [], 'finished': False}
-
-        # Run inference job
-        job_kwargs = {k: v for k, v in kwargs.items() if k in ['text', 'prompt_text', 'llm_prompt_speech_token', 'llm_embedding']}
-        thread = threading.Thread(target=self._run_inference_job, args=(source_speech_token, session_id), kwargs=job_kwargs)
-        thread.start()
-        thread.join()
-
-        # Convert tokens to audio
-        tokens = torch.tensor(self.session_data[session_id]['tokens']).unsqueeze(0)
-        speech = self.token2wav(
-            token=tokens,
-            prompt_token=kwargs.get('flow_prompt_speech_token', torch.zeros(1, 0, dtype=torch.int32)),
-            prompt_feat=kwargs.get('prompt_speech_feat', torch.zeros(1, 0, 80)),
-            embedding=flow_embedding,
-            session_id=session_id,
-            speed=speed
-        )
-
-        # Cleanup
-        with self.lock:
-            self.session_data.pop(session_id)
-
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-        yield {'tts_speech': speech.cpu()}

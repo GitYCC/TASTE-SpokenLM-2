@@ -546,50 +546,6 @@ class TASTE2:
                 
             except Exception as e:
                 print(f"Error generating final audio chunk: {e}")
-        
-        # Generate audio from ALL s3 tokens at once for comparison
-        if all_s3_tokens:
-            print(f"\n=== Generating audio from ALL {len(all_s3_tokens)} s3 tokens at once ===")
-            all_s3_tokens_tensor = torch.tensor(all_s3_tokens, dtype=torch.long).unsqueeze(0)
-            print(f"All S3 tokens shape: {all_s3_tokens_tensor.shape}")
-            print(f"All S3 tokens: {all_s3_tokens}")
-            
-            try:
-                single_audio = self._postprocess(all_s3_tokens_tensor, audio_16k)
-                print(f"Single audio from all tokens generated successfully (shape: {single_audio.shape})")
-                print(f"Single audio duration: {single_audio.shape[-1] / self.sample_rate:.2f}s")
-                
-                # Yield the single audio result
-                yield {
-                    'single_audio': single_audio,
-                    'all_s3_tokens': all_s3_tokens,
-                    'total_tokens': len(all_s3_tokens),
-                    'asr_text': asr_text,
-                    'is_single_audio': True
-                }
-                
-            except Exception as e:
-                print(f"Error generating single audio from all tokens: {e}")
-                single_audio = None
-        else:
-            single_audio = None
-        
-        # Combine all audio chunks with crossfading for smooth transitions
-        if audio_chunks:
-            print(f"\n=== Combining {len(audio_chunks)} audio chunks with crossfading ===")
-            final_audio = self._crossfade_audio_chunks(audio_chunks, crossfade_samples=int(0.01 * self.sample_rate))  # 10ms crossfade
-            
-            print(f"Final audio shape: {final_audio.shape}")
-            print(f"Final audio duration: {final_audio.shape[-1] / self.sample_rate:.2f}s")
-            
-            yield {
-                'final_audio': final_audio,
-                'total_chunks': len(audio_chunks),
-                'asr_text': asr_text,
-                'is_complete': True
-            }
-        else:
-            print("Warning: No audio chunks were generated")
 
     
     @torch.inference_mode()
