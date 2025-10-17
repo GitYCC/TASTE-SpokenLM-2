@@ -138,7 +138,7 @@ class TasteS3GenerationLM(Qwen2LM):
     @torch.inference_mode()
     def inference_bistream(
         self,
-        input_generator: Generator[Tuple[torch.Tensor, torch.Tensor], None, None], # text_token_ids (size=[1, 1]), taste_embs (size=[1, taste_dim])
+        input_generator: Generator[Tuple[torch.Tensor, torch.Tensor], None, None], # text_token_ids (Shape: [1, seq_len]), taste_embs (Shape: [1, seq_len, emb_dim]])
         prompt_text: torch.Tensor,
         prompt_text_len: torch.Tensor,
         prompt_speech_feature: torch.Tensor,
@@ -179,7 +179,6 @@ class TasteS3GenerationLM(Qwen2LM):
         next_fill_index = -1
         
         for text_token, taste_emb in input_generator:
-            text_token = text_token.unsqueeze(0)
             # Get text embedding and mix with taste embedding
             text_emb = self.llm.forward_embed_tokens(text_token).float()
             text_len = torch.tensor([text_token.size(1)], device=device)
