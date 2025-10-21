@@ -664,7 +664,7 @@ class TasteSLM(nn.Module):
                         )
                     text_logp = self.slm.forward_lm_head(hidden_pred[:, -1]).log_softmax(dim=-1)
 
-                top_text_ids = self.sampling_ids(text_logp.squeeze(dim=0), ignore_eos=(True if i < min_len else False))
+                top_text_ids = self.sampling_ids(text_logp.squeeze(dim=0), ignore_eos=(True if i < min_len else False), stop_id=stop_id)
                 text_emb = self.slm.forward_embed_tokens(top_text_ids.unsqueeze(0)).float()
 
                 # stop sampling text
