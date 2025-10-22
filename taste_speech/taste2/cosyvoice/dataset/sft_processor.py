@@ -270,7 +270,7 @@ def format_and_concatenate_conversation(data, get_tokenizer, mode='train'):
                 (role_ids, -1),
                 (newline_id, -1),
                 (content_tokens, message_idx),
-                (newline_id, -1),
+                # (newline_id, -1),
                 (im_end_id, -1)
             ]
             # Iterate over the groups and extend tokens and message IDs
@@ -314,6 +314,7 @@ def format_and_concatenate_conversation(data, get_tokenizer, mode='train'):
                     audio_feat_lengths.append(0)  # No audio for this message
             
             sample['audio_feature_lens'] = audio_feat_lengths  # [M] lengths
+            
         
         yield sample
 

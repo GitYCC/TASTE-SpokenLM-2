@@ -15,6 +15,8 @@ The architecture supports variational latent representation learning for speech 
 and maintains temporal coherence through a delay mechanism.
 """
 
+import logging
+
 import torch
 import torch.nn as nn
 from typing import Tuple, Dict, Optional, Callable, Generator
@@ -584,6 +586,8 @@ class TasteSLM(nn.Module):
         max_len: int = 20,
         min_len: int = 5,
         uuid: str = '',
+        active_rule: Callable = None,
+        stop_id: int = None,
         **kwargs,
     ) -> Generator[Tuple[torch.Tensor, torch.Tensor], None, None]:
         assert text_token.size(0) == 1
@@ -607,18 +611,19 @@ class TasteSLM(nn.Module):
         lm_input = fused[:, :-1 * self.delay, :]  # truncate to text end
         reminding_taste_token_emb = taste_token_emb[:, -1 * self.delay:, :]
         # 5. step by step decode
-        for text_token, taste_emb in self.inference_wrapper(lm_input, reminding_taste_token_emb, max_len, min_len, uuid):
+        for text_token, taste_emb in self.inference_wrapper(lm_input, reminding_taste_token_emb, max_len, min_len, uuid, active_rule=active_rule, stop_id=stop_id):
             yield (text_token, taste_emb)
 
     def sampling_ids(
             self,
             weighted_scores: torch.Tensor,
             ignore_eos: bool = True,
+            stop_id: int = None,
     ):
         num_trials, max_trials = 0, 100
         while True:
             top_ids = self.text_sampling_callable(weighted_scores)
-            if (not ignore_eos) or (top_ids != self.eos_token_id):
+            if (not ignore_eos) or (top_ids != stop_id):
                 break
             num_trials += 1
             if num_trials > max_trials:
@@ -626,7 +631,7 @@ class TasteSLM(nn.Module):
         return top_ids
 
     @torch.inference_mode()
-    def inference_wrapper(self, lm_input, reminding_taste_token_emb, max_len, min_len, uuid):
+    def inference_wrapper(self, lm_input, reminding_taste_token_emb, max_len, min_len, uuid, active_rule=None, stop_id=None):
         assert reminding_taste_token_emb.size(1) == self.delay
         if hasattr(self, 'vllm'):
             raise NotImplementedError
@@ -642,11 +647,28 @@ class TasteSLM(nn.Module):
                     cache=cache
                 )
                 text_logp = self.slm.forward_lm_head(hidden_pred[:, -1]).log_softmax(dim=-1)
-                top_text_ids = self.sampling_ids(text_logp.squeeze(dim=0), ignore_eos=(True if i < min_len else False))
+
+                if i == 0 and active_rule is not None:
+                    is_active, forced_next_tokens = active_rule(text_logp)
+                    if not is_active:
+                        break
+                    while len(forced_next_tokens) > 0:
+                        top_text_ids = torch.tensor([int(forced_next_tokens.pop(0))], device=lm_input.device)
+                        text_emb = self.slm.forward_embed_tokens(top_text_ids.unsqueeze(0)).float()
+                        lm_input = text_emb.reshape(1, 1, -1)
+
+                        hidden_pred, cache = self.slm.forward_one_step(
+                            lm_input,
+                            masks=torch.tril(torch.ones((1, lm_input.shape[1], lm_input.shape[1]), device=lm_input.device)).to(torch.bool),
+                            cache=cache
+                        )
+                    text_logp = self.slm.forward_lm_head(hidden_pred[:, -1]).log_softmax(dim=-1)
+
+                top_text_ids = self.sampling_ids(text_logp.squeeze(dim=0), ignore_eos=(True if i < min_len else False), stop_id=stop_id)
                 text_emb = self.slm.forward_embed_tokens(top_text_ids.unsqueeze(0)).float()
 
                 # stop sampling text
-                if top_text_ids == self.eos_token_id:
+                if top_text_ids == stop_id:
                     break
 
                 # sampling taste
