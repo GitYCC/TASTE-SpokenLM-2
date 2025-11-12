@@ -33,7 +33,12 @@ from torch.nn.utils import clip_grad_norm_
 try:
     import wandb
     WANDB_AVAILABLE = True
-except ImportError:
+    logging.info(f"WandB import successful. Version: {wandb.__version__}")
+except ImportError as e:
+    logging.warning(f"WandB import failed with ImportError: {e}")
+    WANDB_AVAILABLE = False
+except Exception as e:
+    logging.warning(f"WandB import failed with unexpected error: {type(e).__name__}: {e}")
     WANDB_AVAILABLE = False
 
 from deepspeed.runtime.zero.stage_1_and_2 import estimate_zero2_model_states_mem_needs_all_live
@@ -51,21 +56,30 @@ class UnifiedLogger:
     def __init__(self, tensorboard_dir, use_wandb=False, wandb_config=None, training_config=None):
         # Always initialize TensorBoard
         self.tensorboard_writer = SummaryWriter(tensorboard_dir)
-        
+
         # Initialize wandb only if requested and available
         self.use_wandb = use_wandb and WANDB_AVAILABLE
-        
+
         if self.use_wandb:
-            if wandb_config is None:
-                wandb_config = {}
-            
-            # Check if wandb is already initialized
-            if not wandb.run:
-                wandb.init(**wandb_config)
-                
-                # Log training configuration to wandb if provided
-                if training_config is not None and wandb.run:
-                    wandb.config.update(training_config)
+            try:
+                if wandb_config is None:
+                    wandb_config = {}
+
+                logging.info(f"Attempting to initialize WandB with config: {wandb_config}")
+
+                # Check if wandb is already initialized
+                if not wandb.run:
+                    wandb.init(**wandb_config)
+                    logging.info(f"WandB initialized successfully. Run name: {wandb.run.name}, Run URL: {wandb.run.url}")
+
+                    # Log training configuration to wandb if provided
+                    if training_config is not None and wandb.run:
+                        wandb.config.update(training_config)
+                else:
+                    logging.info(f"WandB already initialized. Run name: {wandb.run.name}")
+            except Exception as e:
+                logging.warning(f"Failed to initialize WandB: {e}. Falling back to TensorBoard only.")
+                self.use_wandb = False
             
     def add_scalar(self, tag, value, step):
         """Log scalar values to TensorBoard (always) and wandb (if enabled)"""
@@ -291,12 +305,16 @@ def init_summarywriter(args, configs=None):
                 training_config.update(train_conf)
         
         # Initialize unified logger (TensorBoard always enabled, wandb optional)
+        print(f"DEBUG: About to initialize UnifiedLogger with use_wandb={use_wandb}, wandb_config={wandb_config}")
+        logging.info(f"DEBUG: About to initialize UnifiedLogger with use_wandb={use_wandb}, WANDB_AVAILABLE={WANDB_AVAILABLE}")
         writer = UnifiedLogger(
             tensorboard_dir=args.tensorboard_dir,  # Always provided
             use_wandb=use_wandb,
             wandb_config=wandb_config,
             training_config=training_config
         )
+        print(f"DEBUG: UnifiedLogger initialized. writer.use_wandb={writer.use_wandb}")
+        logging.info(f"DEBUG: UnifiedLogger initialized. writer.use_wandb={writer.use_wandb}")
     
     return writer
 

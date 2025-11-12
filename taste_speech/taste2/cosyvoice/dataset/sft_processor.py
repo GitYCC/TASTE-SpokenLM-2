@@ -185,17 +185,46 @@ def expand_sft_conversations(data, mode='train'):
                 text_roles.append(role)
                 audio_data_list.append(audio)  # Can be None for text-only turns
                 audio_timestamps.append(timestamp)
-            
+
+            # Detect timestamp overlaps between consecutive messages
+            overlap_mask = []
+            for i in range(len(audio_timestamps)):
+                if i < len(audio_timestamps) - 1:  # Not the last message
+                    curr_ts = audio_timestamps[i]
+                    next_ts = audio_timestamps[i + 1]
+
+                    # Only check overlap if BOTH current and next have valid timestamps
+                    if curr_ts is not None and next_ts is not None and \
+                       len(curr_ts) == 2 and len(next_ts) == 2:
+                        curr_end = curr_ts[1]
+                        next_start = next_ts[0]
+                        is_overlap = 1 if curr_end > next_start else 0
+                        overlap_mask.append(is_overlap)
+
+                        if is_overlap:
+                            logging.info(
+                                f'Overlap detected in conversation {sample.get("idx", "unknown")}: '
+                                f'message {i} (role={text_roles[i]}) ends at {curr_end}ms, '
+                                f'message {i+1} (role={text_roles[i+1]}) starts at {next_start}ms'
+                            )
+                    else:
+                        # Missing timestamp(s) - cannot determine overlap, set to 0
+                        overlap_mask.append(0)
+                else:
+                    # Last message - cannot be overlapped by next, set to 0
+                    overlap_mask.append(0)
+
             # Create ONE training sample per conversation with ALL turns
             conversation_sample = {
                 'utt': f"{sample.get('idx', 'unknown')}_conversation",
-                
+
                 # Multi-segment structure (ALL conversation turns)
                 'text_list': text_list,
-                'text_roles': text_roles, 
+                'text_roles': text_roles,
                 'audio_data_list': audio_data_list,  # [None, audio1, audio2, ...]
                 'audio_timestamps': audio_timestamps,
-                
+                'overlap_mask': overlap_mask,  # [M] - 1 if message is overlapped by next, 0 otherwise
+
                 # Metadata
                 'meta': sample.get('meta', {}),
                 'conversation_id': sample.get('idx', 'unknown'),
@@ -700,14 +729,22 @@ def padding_sft(data, mode='train', gan=False, dpo=False):
         token_message_ids = pad_sequence(token_message_ids, batch_first=True, padding_value=-1)
         # No more audio_message_ids since we have explicit message dimension
 
+        # Pad overlap_mask to [B, M] - same shape as number of messages per sample
+        overlap_mask_lists = [sample[i]['overlap_mask'] for i in order]
+        max_messages_for_mask = max(len(om) for om in overlap_mask_lists) if overlap_mask_lists else 0
+        overlap_mask = torch.zeros(len(overlap_mask_lists), max_messages_for_mask, dtype=torch.int32)
+        for batch_idx, om_list in enumerate(overlap_mask_lists):
+            overlap_mask[batch_idx, :len(om_list)] = torch.tensor(om_list, dtype=torch.int32)
+
         batch = {
             "utts": utts,
             "text": text,
             "text_token": text_token,  # [B, L]
             "text_token_len": text_token_len,  # [B]
-            'audio_feature': audio_feature,  # [B, M, T, D] 
+            'audio_feature': audio_feature,  # [B, M, T, D]
             'audio_feature_lens': audio_feature_lens,  # [B, M]
             'token_message_ids': token_message_ids,  # [B, L]
+            'overlap_mask': overlap_mask,  # [B, M] - 1 if message overlapped by next, 0 otherwise
             'sft_training': sft_training,
         }
         if dpo is True:

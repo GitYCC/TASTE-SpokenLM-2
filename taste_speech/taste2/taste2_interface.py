@@ -138,18 +138,44 @@ class TASTE2Model(CosyVoice2Model):
 
     def _load_vllm(self, vllm_path):
         """Load VLLM optimizations"""
-        # Implementation for VLLM loading
-        pass
+        from taste_speech.taste2.cosyvoice.utils.file_utils import export_cosyvoice2_vllm
+        export_cosyvoice2_vllm(self.llm, vllm_path, self.device)
+        from vllm import EngineArgs, LLMEngine
+        engine_args = EngineArgs(model=vllm_path,
+                                 skip_tokenizer_init=True,
+                                 enable_prompt_embeds=True,
+                                 gpu_memory_utilization=0.2)
+        self.llm.vllm = LLMEngine.from_engine_args(engine_args)
+        self.llm.lock = threading.Lock()
+        del self.llm.llm.model.model.layers
 
     def _load_jit(self, jit_path):
         """Load JIT optimizations"""
         # Implementation for JIT loading
-        pass
+        flow_encoder = torch.jit.load(jit_path, map_location=self.device)
+        self.flow.encoder = flow_encoder
 
     def _load_trt(self, trt_plan_path, trt_onnx_path, trt_concurrent, fp16):
         """Load TensorRT optimizations"""
-        # Implementation for TRT loading
-        pass
+        from taste_speech.taste2.cosyvoice.utils.file_utils import convert_onnx_to_trt
+        from taste_speech.taste2.cosyvoice.utils.common import TrtContextWrapper
+        assert torch.cuda.is_available(), 'tensorrt only supports gpu!'
+        if not os.path.exists(trt_plan_path) or os.path.getsize(trt_plan_path) == 0:
+            convert_onnx_to_trt(trt_plan_path, self.get_trt_kwargs(), trt_onnx_path, fp16)
+        del self.flow.decoder.estimator
+        import tensorrt as trt
+        with open(trt_plan_path, 'rb') as f:
+            estimator_engine = trt.Runtime(trt.Logger(trt.Logger.INFO)).deserialize_cuda_engine(f.read())
+        assert estimator_engine is not None, 'failed to load trt {}'.format(trt_plan_path)
+        self.flow.decoder.estimator = TrtContextWrapper(estimator_engine, trt_concurrent=trt_concurrent, device=self.device)
+
+    def get_trt_kwargs(self):
+        """Get TensorRT configuration parameters"""
+        min_shape = [(2, 80, 4), (2, 1, 4), (2, 80, 4), (2, 80, 4)]
+        opt_shape = [(2, 80, 500), (2, 1, 500), (2, 80, 500), (2, 80, 500)]
+        max_shape = [(2, 80, 3000), (2, 1, 3000), (2, 80, 3000), (2, 80, 3000)]
+        input_names = ["x", "mask", "mu", "cond"]
+        return {'min_shape': min_shape, 'opt_shape': opt_shape, 'max_shape': max_shape, 'input_names': input_names}
 
     def _run_inference_job(self, source_token, session_id, **kwargs):
         """Unified inference job for both LLM and VC"""
