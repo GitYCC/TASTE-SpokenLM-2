@@ -369,6 +369,7 @@ class TasteSLM(nn.Module):
         use_continue: bool = False,
         ignore_id: int = -1,
         eos_token_id: int = 151643,
+        im_end_token_id: int = 151645,
         text_sampling_callable: Callable = None,
     ):
         """Initialize the TASTE Speech Language Model.
@@ -406,7 +407,8 @@ class TasteSLM(nn.Module):
         self.use_continue = use_continue
         self.ignore_id = ignore_id  # Token ID to ignore in loss computation
         self.eos_token_id = eos_token_id  # End-of-sequence token
-        
+        self.im_end_token_id = im_end_token_id  # <|im_end|> token ID for masking overlaps
+
         self.text_sampling_callable = text_sampling_callable
 
     def reload(self, path, device):
@@ -425,7 +427,9 @@ class TasteSLM(nn.Module):
         text_token_len: torch.Tensor,
         lm_input_target_mode: str,
         taste_latent: torch.Tensor = None,
-        taste_token_emb: torch.Tensor = None
+        taste_token_emb: torch.Tensor = None,
+        overlap_mask: Optional[torch.Tensor] = None,
+        token_message_ids: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
 
         # Initialize lists to collect processed sequences
@@ -444,6 +448,34 @@ class TasteSLM(nn.Module):
             this_lm_text_target = torch.tensor(
                 text_token[i].tolist()[1:] + [self.eos_token_id] + [self.ignore_id] * (self.delay - 1)
             )
+
+            # Mask <im_end> tokens for overlapped messages in SFT mode
+            if overlap_mask is not None and token_message_ids is not None:
+                sample_overlap_mask = overlap_mask[i]  # [M] - which messages are overlapped
+                sample_token_msg_ids = token_message_ids[i]  # [L] - which message each token belongs to
+
+                # Find which messages are overlapped (overlap_mask[msg_id] == 1)
+                overlapped_msg_ids = torch.where(sample_overlap_mask == 1)[0]
+
+                for msg_id in overlapped_msg_ids:
+                    # Find positions where this message's content tokens are
+                    msg_content_mask = (sample_token_msg_ids == msg_id)
+                    msg_positions = msg_content_mask.nonzero(as_tuple=True)[0]
+
+                    if len(msg_positions) > 0:
+                        # The <im_end> token is right after the last content token of this message
+                        # It has token_message_ids == -1 (special token)
+                        last_content_pos = msg_positions[-1].item()
+
+                        # Search for <im_end> token in the next few positions
+                        for check_pos in range(last_content_pos + 1, min(last_content_pos + 5, len(text_token[i]))):
+                            if text_token[i][check_pos].item() == self.im_end_token_id:
+                                # Found <im_end> token, mask it in target
+                                # Remember: target is shifted by -1 (target = input[1:])
+                                target_pos = check_pos - 1
+                                if 0 <= target_pos < len(this_lm_text_target):
+                                    this_lm_text_target[target_pos] = self.ignore_id
+                                break
 
             this_taste_latent_target = torch.tensor(
                 [[0.0 for _ in range(self.d)] for _ in range(self.delay - 1)] + taste_latent[i].tolist()
@@ -547,10 +579,15 @@ class TasteSLM(nn.Module):
 
         text_token_emb = self.slm.forward_embed_tokens(text_token)
 
+        # Extract overlap_mask and token_message_ids from batch for SFT mode
+        overlap_mask = batch.get('overlap_mask', None) if batch.get('sft_training') else None
+        token_message_ids = batch.get('token_message_ids', None) if batch.get('sft_training') else None
+
         # Prepare aligned language model inputs and targets
         lm_text_target, lm_taste_latent_target, lm_taste_mask, lm_input, lm_input_len = \
             self.prepare_lm_input_target(text_token, text_token_emb.float(), text_token_len, lm_input_target_mode,
-                taste_latent=taste_latent, taste_token_emb=taste_token_emb)
+                taste_latent=taste_latent, taste_token_emb=taste_token_emb,
+                overlap_mask=overlap_mask, token_message_ids=token_message_ids)
         
         # Move prepared tensors to device
         lm_text_target = lm_text_target.to(device)
@@ -663,7 +700,6 @@ class TasteSLM(nn.Module):
                         top_text_ids = torch.tensor([int(forced_next_tokens.pop(0))], device=lm_input.device)
                         text_emb = self.slm.forward_embed_tokens(top_text_ids.unsqueeze(0)).float()
                         lm_input = text_emb.reshape(1, 1, -1)
-
                         hidden_pred, cache = self.slm.forward_one_step(
                             lm_input,
                             masks=torch.tril(torch.ones((1, lm_input.shape[1], lm_input.shape[1]), device=lm_input.device)).to(torch.bool),

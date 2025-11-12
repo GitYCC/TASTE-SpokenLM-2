@@ -12,10 +12,10 @@ slm_input_size: 3584
 slm_output_size: 3584
 spk_embed_dim: 192
 codebook_dim: 256
-qwen_pretrain_path: '/mnt/shared/p01/yc/models/TASTE2-8B-EN/CosyVoice-BlankEN'
+qwen_pretrain_path: '/home/chenwils/TASTE_models/TASTE2-8B-EN/CosyVoice-BlankEN'
 qwen_pretrain_path_for_slm: ''
-qwen_pretrain_path_for_slm_7b: '/mnt/shared/p01/yc/models/TASTE2-8B-EN/qwen2-7b'
-taste_tokenizer_backbond_path: '/mnt/shared/p01/yc/models/TASTE2-8B-EN/distil-whisper'
+qwen_pretrain_path_for_slm_7b: '/home/chenwils/TASTE_models/TASTE2-8B-EN/qwen2-7b'
+taste_tokenizer_backbond_path: '/home/chenwils/TASTE_models/TASTE2-8B-EN/distil-whisper'
 path_reload_taste_stage1: ''
 token_frame_rate: 25
 token_mel_ratio: 2
@@ -24,7 +24,7 @@ max_frames_in_batch: 1000 # original: 2000
 accum_grad: 2 # original: 2
 lr: 1e-5
 save_per_step: 1000  # production: 10000
-wandb_run_name: "250930-sft-emb"
+wandb_run_name: "251107-sft-emb"
 
 # stream related params
 chunk_size: 25 # streaming inference chunk size, in token
@@ -271,7 +271,7 @@ train_conf:
     scheduler: constantlr # change to constantlr during sft
     scheduler_conf:
         warmup_steps: 1000
-    max_epoch: 200
+    max_epoch: 10 #200
     grad_clip: 5
     accum_grad: !ref <accum_grad> 
     log_interval: 100

@@ -229,11 +229,14 @@ class TransformerLM(torch.nn.Module):
 
 
 class Qwen2Encoder(torch.nn.Module):
-    def __init__(self, pretrain_path, attn_implementation='eager', torch_dtype=torch.bfloat16, use_lora=False, lora_config=None):
+    def __init__(self, pretrain_path, attn_implementation='eager', torch_dtype=torch.bfloat16, use_lora=False, lora_config=None, merge_lora_before_init=False):
         super().__init__()
         self.model = Qwen2ForCausalLM.from_pretrained(pretrain_path, attn_implementation=attn_implementation, torch_dtype=torch_dtype)
         self.torch_dtype = torch_dtype
         self._use_lora = use_lora
+        self._merge_lora_before_init = merge_lora_before_init
+        self._lora_config_dict = lora_config  # Store for later use
+
         if use_lora:
             from peft import LoraConfig, get_peft_model
             from taste_speech.modules_taste.utils import _find_all_linear_names
@@ -251,7 +254,7 @@ class Qwen2Encoder(torch.nn.Module):
                 if 'embed_tokens' not in lora_target_modules:
                     lora_target_modules.append('embed_tokens')
                 self.use_selective_embedding = False
-                
+
             lora_config = LoraConfig(
                 r=lora_config['lora_r'],
                 lora_alpha=lora_config['lora_alpha'],
@@ -264,6 +267,65 @@ class Qwen2Encoder(torch.nn.Module):
                 task_type="CAUSAL_LM",
             )
             self.model = get_peft_model(self.model, lora_config)
+
+    def merge_and_reinit_lora(self):
+        """
+        Merge existing LoRA weights into base model, then reinitialize with fresh LoRA adapters.
+
+        This is useful for SFT where you want to:
+        1. Keep the knowledge from Stage 2 LoRA (by merging into base)
+        2. Train a NEW set of LoRA adapters on top for SFT
+
+        Usage:
+            # After loading Stage 2 checkpoint
+            slm_model.slm.merge_and_reinit_lora()
+            # Now the model has merged Stage 2 LoRA and fresh LoRA_sft ready to train
+        """
+        import logging
+        from peft import LoraConfig, get_peft_model
+        from taste_speech.modules_taste.utils import _find_all_linear_names
+
+        if not self._use_lora:
+            logging.warning("merge_and_reinit_lora called but LoRA is not enabled. Skipping.")
+            return
+
+        logging.info("Step 1/3: Merging existing LoRA weights into base model...")
+        # Merge current LoRA into base weights
+        self.model = self.model.merge_and_unload()
+        logging.info("  ✓ Stage 2 LoRA merged into base model")
+
+        logging.info("Step 2/3: Reinitializing with fresh LoRA adapters...")
+        # Rebuild LoRA config with same settings
+        lora_config = self._lora_config_dict
+        lora_target_modules = list(lora_config['lora_target_modules'] or [])
+        if lora_config['lora_target_linear']:
+            linear_names = _find_all_linear_names(self.model)
+            lora_target_modules = list(set(lora_target_modules + linear_names))
+
+        if lora_config['lora_mode'] == 'sft':
+            if 'embed_tokens' not in lora_target_modules:
+                lora_target_modules.append('embed_tokens')
+
+        new_lora_config = LoraConfig(
+            r=lora_config['lora_r'],
+            lora_alpha=lora_config['lora_alpha'],
+            target_modules=lora_target_modules,
+            layers_to_transform=None,
+            lora_dropout=lora_config['lora_dropout'],
+            fan_in_fan_out=lora_config['lora_fan_in_fan_out'],
+            modules_to_save=lora_config['lora_modules_to_save'] if lora_config['lora_modules_to_save'] else None,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+
+        # Apply fresh LoRA
+        self.model = get_peft_model(self.model, new_lora_config)
+        logging.info("  ✓ Fresh LoRA adapters initialized (randomly)")
+
+        logging.info("Step 3/3: Ready for SFT training!")
+        logging.info("  - Base model now contains Stage 2 knowledge")
+        logging.info("  - Fresh LoRA adapters ready to learn SFT-specific patterns")
+        logging.info("  - You can now start SFT training\n")
 
 
     def forward_embed_tokens(self, text_token):

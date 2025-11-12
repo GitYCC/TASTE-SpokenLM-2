@@ -90,6 +90,12 @@ def get_args():
                         default=60,
                         type=int,
                         help='timeout (in seconds) of cosyvoice_join.')
+    parser.add_argument('--merge_lora_before_sft',
+                        action='store_true',
+                        default=False,
+                        help='Merge Stage 2 LoRA into base model and reinitialize fresh LoRA for SFT. '
+                             'Use this when you want to: (1) Keep Stage 2 knowledge in base weights, '
+                             '(2) Train a NEW set of LoRA adapters for SFT')
     parser = deepspeed.add_config_arguments(parser)
     args = parser.parse_args()
     return args
@@ -156,6 +162,17 @@ def main():
                 start_epoch = state_dict['epoch']
         else:
             logging.warning('checkpoint {} do not exsist!'.format(args.checkpoint))
+
+    # Merge Stage 2 LoRA and reinitialize fresh LoRA for SFT if requested
+    if args.merge_lora_before_sft:
+        logging.info("=" * 80)
+        logging.info("MERGE AND REINIT LORA MODE ENABLED")
+        logging.info("=" * 80)
+        if args.model == 'slm' and hasattr(model, 'slm'):
+            model.slm.merge_and_reinit_lora()
+        else:
+            logging.warning(f"--merge_lora_before_sft specified but model type is '{args.model}'. Only 'slm' is supported.")
+        logging.info("=" * 80)
 
     # Dispatch model from cpu to gpu
     model = wrap_cuda_model(args, model)
