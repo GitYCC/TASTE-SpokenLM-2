@@ -632,6 +632,12 @@ class TasteSLM(nn.Module):
 
     @torch.inference_mode()
     def inference_wrapper(self, lm_input, reminding_taste_token_emb, max_len, min_len, uuid, active_rule=None, stop_id=None):
+
+        # active_rule is a callable with signature: active_rule(text_logp, cache=None, device=None) -> (is_active, forced_next_tokens)
+        # Returns:
+        #   - is_active: whether the rule should be applied
+        #   - forced_next_tokens: list of token IDs to force as next tokens if active
+
         assert reminding_taste_token_emb.size(1) == self.delay
         if hasattr(self, 'vllm'):
             raise NotImplementedError
@@ -639,6 +645,7 @@ class TasteSLM(nn.Module):
         else:
             text_out_tokens_queue = []
             cache = None
+
             for i in range(max_len):
                 # sampling text
                 hidden_pred, cache = self.slm.forward_one_step(
@@ -649,7 +656,7 @@ class TasteSLM(nn.Module):
                 text_logp = self.slm.forward_lm_head(hidden_pred[:, -1]).log_softmax(dim=-1)
 
                 if i == 0 and active_rule is not None:
-                    is_active, forced_next_tokens = active_rule(text_logp)
+                    is_active, forced_next_tokens = active_rule(text_logp, cache=cache, device=lm_input.device) 
                     if not is_active:
                         break
                     while len(forced_next_tokens) > 0:
