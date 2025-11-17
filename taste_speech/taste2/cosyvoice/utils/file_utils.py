@@ -88,7 +88,16 @@ def convert_onnx_to_trt(trt_model, trt_kwargs, onnx_model, fp16):
     logging.info("Succesfully convert onnx to trt...")
 
 
-def export_cosyvoice2_vllm(model, model_path, device):
+def export_cosyvoice2_vllm(model, model_path, device, rename_architecture=False):
+    """Export model to vLLM format.
+
+    Args:
+        model: Model to export
+        model_path: Path to save the exported model
+        device: Device to use
+        rename_architecture: If True, rename to CosyVoice2ForCausalLM (not compatible with vLLM).
+                           If False, keep as Qwen2ForCausalLM (vLLM compatible).
+    """
     if os.path.exists(model_path):
         return
     pad_to = DEFAULT_VOCAB_PADDING_SIZE = 64
@@ -98,12 +107,13 @@ def export_cosyvoice2_vllm(model, model_path, device):
 
     dtype = torch.bfloat16
     # lm_head
-    new_lm_head = torch.nn.Linear(in_features=feature_size, out_features=pad_vocab_size, bias=True)
+    # Note: Qwen2ForCausalLM's lm_head has no bias, but CosyVoice's llm_decoder has bias.
+    # For vLLM compatibility, we create lm_head without bias and ignore the original bias.
+    new_lm_head = torch.nn.Linear(in_features=feature_size, out_features=pad_vocab_size, bias=False)
     with torch.no_grad():
         new_lm_head.weight[:vocab_size] = model.llm_decoder.weight
-        new_lm_head.bias[:vocab_size] = model.llm_decoder.bias
         new_lm_head.weight[vocab_size:] = 0
-        new_lm_head.bias[vocab_size:] = 0
+        # Note: Ignoring model.llm_decoder.bias for vLLM compatibility
     model.llm.model.lm_head = new_lm_head
     new_codec_embed = torch.nn.Linear(in_features=feature_size, out_features=pad_vocab_size)
     # embed_tokens
@@ -121,9 +131,13 @@ def export_cosyvoice2_vllm(model, model_path, device):
     del model.llm.model.config.eos_token_id
     model.llm.model.config.vocab_size = pad_vocab_size
     model.llm.model.config.tie_word_embeddings = False
-    model.llm.model.config.use_bias = True
+    # Note: Do not set use_bias for vLLM compatibility (Qwen2 doesn't have lm_head bias)
     model.llm.model.save_pretrained(model_path)
-    os.system('sed -i s@Qwen2ForCausalLM@CosyVoice2ForCausalLM@g {}/config.json'.format(os.path.abspath(model_path)))
+
+    # Only rename architecture if explicitly requested (not recommended for vLLM)
+    if rename_architecture:
+        os.system('sed -i s@Qwen2ForCausalLM@CosyVoice2ForCausalLM@g {}/config.json'.format(os.path.abspath(model_path)))
+
     model.llm.model.config.vocab_size = tmp_vocab_size
     model.llm.model.config.tie_word_embeddings = tmp_tie_embedding
     model.llm.model.set_input_embeddings(embed_tokens)

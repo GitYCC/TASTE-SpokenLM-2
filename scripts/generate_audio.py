@@ -362,9 +362,11 @@ def main():
     parser.add_argument('--output_dir', type=str, required=True, help='Output directory')
     parser.add_argument('--test_files', type=str, nargs='+', required=True, help='Audio/Arrow file paths (multiple files supported)')
     parser.add_argument('--asr_model_dir', type=str, default="openai/whisper-large-v3", help='ASR model')
-    parser.add_argument('--stage', type=str, choices=['1', '2'], default='1', 
+    parser.add_argument('--stage', type=str, choices=['1', '2'], default='1',
                         help='Which stage to run: 1 or 2 (default: 1)')
-    
+    parser.add_argument('--load_vllm', action='store_true',
+                        help='Load vLLM engine for faster inference (requires vLLM installation)')
+
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
     
@@ -373,14 +375,15 @@ def main():
     print(f"Processing {len(test_files)} audio files...")
     print(f"Output directory: {args.output_dir}")
     print(f"Stage: {args.stage}")
-    
+    print(f"vLLM acceleration: {'Enabled' if args.load_vllm else 'Disabled'}")
+
     # Initialize model once
     if args.stage == '1':
         print("\nInitializing TASTE2 model for Stage 1...")
-        model = TASTE2(args.model_dir, stage=1, fp16=False)
+        model = TASTE2(args.model_dir, stage=1, load_vllm=args.load_vllm, fp16=False)
     elif args.stage == '2':
         print("\nInitializing TASTE2 model for Stage 2...")
-        model = TASTE2(args.model_dir, stage=2, fp16=False)
+        model = TASTE2(args.model_dir, stage=2, load_vllm=args.load_vllm, fp16=False)
     
     # Process all files
     all_results = []
