@@ -88,7 +88,16 @@ def convert_onnx_to_trt(trt_model, trt_kwargs, onnx_model, fp16):
     logging.info("Succesfully convert onnx to trt...")
 
 
-def export_cosyvoice2_vllm(model, model_path, device):
+def export_cosyvoice2_vllm(model, model_path, device, rename_architecture=False):
+    """Export model to vLLM format.
+
+    Args:
+        model: Model to export
+        model_path: Path to save the exported model
+        device: Device to use
+        rename_architecture: If True, rename to CosyVoice2ForCausalLM (not compatible with vLLM).
+                           If False, keep as Qwen2ForCausalLM (vLLM compatible).
+    """
     if os.path.exists(model_path):
         return
     pad_to = DEFAULT_VOCAB_PADDING_SIZE = 64
@@ -123,7 +132,11 @@ def export_cosyvoice2_vllm(model, model_path, device):
     model.llm.model.config.tie_word_embeddings = False
     model.llm.model.config.use_bias = True
     model.llm.model.save_pretrained(model_path)
-    os.system('sed -i s@Qwen2ForCausalLM@CosyVoice2ForCausalLM@g {}/config.json'.format(os.path.abspath(model_path)))
+
+    # Only rename architecture if explicitly requested (not recommended for vLLM)
+    if rename_architecture:
+        os.system('sed -i s@Qwen2ForCausalLM@CosyVoice2ForCausalLM@g {}/config.json'.format(os.path.abspath(model_path)))
+
     model.llm.model.config.vocab_size = tmp_vocab_size
     model.llm.model.config.tie_word_embeddings = tmp_tie_embedding
     model.llm.model.set_input_embeddings(embed_tokens)
