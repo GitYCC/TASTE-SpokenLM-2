@@ -96,7 +96,12 @@ class TASTE2Model(CosyVoice2Model):
 
         # Optional optimizations
         if load_vllm:
-            self._load_vllm(os.path.join(model_dir, 'vllm'))
+            if stage in [2, 'sft']:
+                # Stage2/SFT: Load vLLM for CosyVoice2 (self.llm)
+                self._load_vllm(os.path.join(model_dir, 'vllm'))
+            elif stage == 1:
+                # Stage1: Load vLLM for TasteS3GenerationLM (self.llm)
+                self._load_stage1_vllm(os.path.join(model_dir, 'vllm'))
         if load_jit:
             precision = 'fp16' if fp16 else 'fp32'
             self._load_jit(os.path.join(model_dir, f'flow.encoder.{precision}.zip'))
@@ -148,6 +153,29 @@ class TASTE2Model(CosyVoice2Model):
         self.llm.vllm = LLMEngine.from_engine_args(engine_args)
         self.llm.lock = threading.Lock()
         del self.llm.llm.model.model.layers
+
+    def _load_stage1_vllm(self, vllm_path):
+        """Load vLLM optimizations for Stage1 TasteS3GenerationLM"""
+        from taste_speech.taste2.cosyvoice.utils.file_utils import export_cosyvoice2_vllm
+        from vllm import EngineArgs, LLMEngine
+
+        # Export model to vLLM format
+        export_cosyvoice2_vllm(self.llm, vllm_path, self.device)
+
+        # Create vLLM engine
+        engine_args = EngineArgs(
+            model=vllm_path,
+            skip_tokenizer_init=True,
+            enable_prompt_embeds=True,
+            gpu_memory_utilization=0.2
+        )
+        self.llm.vllm = LLMEngine.from_engine_args(engine_args)
+        self.llm.lock = threading.Lock()
+
+        # Delete original layers to save memory
+        del self.llm.llm.model.model.layers
+
+        logging.info('vLLM engine loaded for Stage1 TasteS3GenerationLM')
 
     def _load_jit(self, jit_path):
         """Load JIT optimizations"""
