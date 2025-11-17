@@ -107,12 +107,13 @@ def export_cosyvoice2_vllm(model, model_path, device, rename_architecture=False)
 
     dtype = torch.bfloat16
     # lm_head
-    new_lm_head = torch.nn.Linear(in_features=feature_size, out_features=pad_vocab_size, bias=True)
+    # Note: Qwen2ForCausalLM's lm_head has no bias, but CosyVoice's llm_decoder has bias.
+    # For vLLM compatibility, we create lm_head without bias and ignore the original bias.
+    new_lm_head = torch.nn.Linear(in_features=feature_size, out_features=pad_vocab_size, bias=False)
     with torch.no_grad():
         new_lm_head.weight[:vocab_size] = model.llm_decoder.weight
-        new_lm_head.bias[:vocab_size] = model.llm_decoder.bias
         new_lm_head.weight[vocab_size:] = 0
-        new_lm_head.bias[vocab_size:] = 0
+        # Note: Ignoring model.llm_decoder.bias for vLLM compatibility
     model.llm.model.lm_head = new_lm_head
     new_codec_embed = torch.nn.Linear(in_features=feature_size, out_features=pad_vocab_size)
     # embed_tokens
@@ -130,7 +131,7 @@ def export_cosyvoice2_vllm(model, model_path, device, rename_architecture=False)
     del model.llm.model.config.eos_token_id
     model.llm.model.config.vocab_size = pad_vocab_size
     model.llm.model.config.tie_word_embeddings = False
-    model.llm.model.config.use_bias = True
+    # Note: Do not set use_bias for vLLM compatibility (Qwen2 doesn't have lm_head bias)
     model.llm.model.save_pretrained(model_path)
 
     # Only rename architecture if explicitly requested (not recommended for vLLM)
