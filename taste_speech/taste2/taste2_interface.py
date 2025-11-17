@@ -81,15 +81,26 @@ class TASTE2Model(CosyVoice2Model):
             self.llm.half()
             self.flow.half()
 
-        # Cache and streaming parameters
-        self.token_hop_len = 25
-        self.mel_cache_len = 8
-        self.source_cache_len = self.mel_cache_len * 480
+        # Cache and streaming parameters (from CosyVoice2Model)
+        self.token_min_hop_len = 2 * self.flow.input_frame_rate
+        self.token_max_hop_len = 4 * self.flow.input_frame_rate
+        self.token_overlap_len = 20
+        self.mel_overlap_len = int(self.token_overlap_len / self.flow.input_frame_rate * 22050 / 256)
+        self.mel_window = np.hamming(2 * self.mel_overlap_len)
+        self.mel_cache_len = 20
+        self.source_cache_len = self.mel_cache_len * 256
         self.speech_window = np.hamming(2 * self.source_cache_len)
+        self.stream_scale_factor = 1
         self.llm_context = torch.cuda.stream(torch.cuda.Stream(self.device)) if torch.cuda.is_available() else nullcontext()
         self.lock = threading.Lock()
-        self.session_data = {}
+
+        # Session-related dictionaries (from CosyVoice2Model)
+        self.tts_speech_token_dict = {}
+        self.llm_end_dict = {}
+        self.mel_overlap_dict = {}
+        self.flow_cache_dict = {}
         self.hift_cache_dict = {}
+        self.session_data = {}
 
         # Load model weights
         self._load_checkpoints(model_dir, stage)
