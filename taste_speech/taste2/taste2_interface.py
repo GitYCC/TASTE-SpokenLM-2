@@ -51,6 +51,7 @@ class TASTE2Model(CosyVoice2Model):
                     'taste_tokenizer_backbond_path': os.path.join(model_dir, 'distil-whisper'),
                     'qwen_pretrain_path_for_slm': os.path.join(model_dir, 'qwen2-1_5b'),
                     'qwen_pretrain_path_for_slm_7b': os.path.join(model_dir, 'qwen2-7b'),
+                    'slm.slm.use_lora': False,
                 }
             )
 
@@ -144,7 +145,7 @@ class TASTE2Model(CosyVoice2Model):
         engine_args = EngineArgs(model=vllm_path,
                                  skip_tokenizer_init=True,
                                  enable_prompt_embeds=True,
-                                 gpu_memory_utilization=0.2)
+                                 gpu_memory_utilization=0.8)
         self.llm.vllm = LLMEngine.from_engine_args(engine_args)
         self.llm.lock = threading.Lock()
         del self.llm.llm.model.model.layers
