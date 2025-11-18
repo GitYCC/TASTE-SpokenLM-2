@@ -344,14 +344,14 @@ class TasteSLMOut(nn.Module):
 
 class TasteSLM(nn.Module):
     """Main TASTE Speech Language Model integrating all components.
-    
+
     This is the primary model class that orchestrates the entire TASTE pipeline:
     1. Text token embedding through the speech language model
     2. Taste token embedding through the taste tokenizer
     3. Multimodal fusion with temporal alignment
     4. Language model processing
     5. Dual-modal output prediction (text + taste)
-    
+
     The model handles batch processing with proper sequence padding and supports
     both training and inference modes with configurable delay mechanisms.
     """
@@ -371,6 +371,7 @@ class TasteSLM(nn.Module):
         eos_token_id: int = 151643,
         im_end_token_id: int = 151645,
         text_sampling_callable: Callable = None,
+        banned_token_ids: list = None,
     ):
         """Initialize the TASTE Speech Language Model.
         
@@ -410,6 +411,9 @@ class TasteSLM(nn.Module):
         self.im_end_token_id = im_end_token_id  # <|im_end|> token ID for masking overlaps
 
         self.text_sampling_callable = text_sampling_callable
+
+        # Token banning for inference (e.g., ban numbers and non-speech punctuation)
+        self.banned_token_ids = banned_token_ids if banned_token_ids is not None else []
 
     def reload(self, path, device):
         checkpoint = torch.load(path, map_location=device)
@@ -651,6 +655,19 @@ class TasteSLM(nn.Module):
         for text_token, taste_emb in self.inference_wrapper(lm_input, reminding_taste_token_emb, max_len, min_len, uuid, active_rule=active_rule, stop_id=stop_id):
             yield (text_token, taste_emb)
 
+    def _ban_tokens(self, logits: torch.Tensor) -> torch.Tensor:
+        """Ban certain tokens by setting their logits to -inf.
+
+        Args:
+            logits (torch.Tensor): Logits tensor of shape (..., vocab_size)
+
+        Returns:
+            torch.Tensor: Modified logits with banned tokens set to -inf
+        """
+        if len(self.banned_token_ids) > 0:
+            logits[:, self.banned_token_ids] = float('-inf')
+        return logits
+
     def sampling_ids(
             self,
             weighted_scores: torch.Tensor,
@@ -667,6 +684,12 @@ class TasteSLM(nn.Module):
                 raise RuntimeError('sampling reaches max_trials {} and still get eos when ignore_eos is True, check your input!'.format(max_trials))
         return top_ids
 
+    def _get_text_logp_with_ban(self, hidden_pred):
+        text_logits = self.slm.forward_lm_head(hidden_pred[:, -1])
+        text_logits = self._ban_tokens(text_logits)  # Ban unwanted tokens
+        text_logp = text_logits.log_softmax(dim=-1)
+        return text_logp
+      
     @torch.inference_mode()
     def inference_wrapper(self, lm_input, reminding_taste_token_emb, max_len, min_len, uuid, active_rule=None, stop_id=None):
 
@@ -694,7 +717,7 @@ class TasteSLM(nn.Module):
                 masks=torch.tril(torch.ones((1, lm_input.shape[1], lm_input.shape[1]), device=lm_input.device)).to(torch.bool),
                 cache=cache
             )
-            text_logp = self.slm.forward_lm_head(hidden_pred[:, -1]).log_softmax(dim=-1)
+            text_logp = self._get_text_logp_with_ban(hidden_pred)
 
             if i == 0 and active_rule is not None:
                 is_active, forced_next_tokens = active_rule(text_logp, cache=cache, device=lm_input.device)
@@ -709,7 +732,7 @@ class TasteSLM(nn.Module):
                         masks=torch.tril(torch.ones((1, lm_input.shape[1], lm_input.shape[1]), device=lm_input.device)).to(torch.bool),
                         cache=cache
                     )
-                text_logp = self.slm.forward_lm_head(hidden_pred[:, -1]).log_softmax(dim=-1)
+                text_logp = self._get_text_logp_with_ban(hidden_pred)
 
             top_text_ids = self.sampling_ids(text_logp.squeeze(dim=0), ignore_eos=(True if i < min_len else False), stop_id=stop_id)
             text_emb = self.slm.forward_embed_tokens(top_text_ids.unsqueeze(0)).float()
