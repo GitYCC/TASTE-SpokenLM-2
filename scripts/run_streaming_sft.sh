@@ -6,10 +6,11 @@
 set -e  # Exit on any error
 
 # Configuration
-MODEL_DIR="/mnt/shared/p01/yc/models/TASTE2_SFT"
-OUTPUT_DIR="./results/sft/streaming"
+MODEL_DIR="/home/chenwils/TASTE_models/TASTE2-8B-EN-SFT-new"
+OUTPUT_DIR="./results/sft/streaming-new"
 # TEST_FILE="/mnt/shared/NTU_TASLM/dienruei/TASTE-SpokenLM/examples/orig/hifi-tts-dev-clean-speaker6097/004.wav"
-TEST_FILE="/mnt/shared/p01/dienruei/synthetic_data/val_syn_data/syn_data_n_filler.data7-2.scenario45_18_turn_01_user.mp3"
+# TEST_FILE="/mnt/shared/p01/dienruei/synthetic_data/val_syn_data/syn_data_n_filler.data7-2.scenario45_18_turn_01_user.mp3"
+TEST_FILE="/home/chenwils/dienruei/TASTE-Voice-Bot/tests_server/samples/syn_data_n_filler_original.wav"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "========================================"
