@@ -20,7 +20,7 @@ path_reload_taste_stage1: ''
 token_frame_rate: 25
 token_mel_ratio: 2
 attn_implementation: 'eager' #'sdpa'
-max_frames_in_batch: 1000 # original: 2000
+max_frames_in_batch: 864 #1000 # original: 2000
 accum_grad: 2 # original: 2
 lr: 1e-5
 save_per_step: 1000  # production: 10000

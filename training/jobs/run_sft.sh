@@ -14,6 +14,7 @@ conda activate cosyvoice
 # Install required packages if not already installed
 echo "Installing required packages (einx, peft, wandb)..."
 pip install einx peft wandb
+pip install 'transformers==4.49.0' 'peft==0.17.0'
 
 # Install the project in editable mode
 echo "Installing project in editable mode..."

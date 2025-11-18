@@ -12,10 +12,10 @@ slm_input_size: 3584
 slm_output_size: 3584
 spk_embed_dim: 192
 codebook_dim: 256
-qwen_pretrain_path: '/mnt/shared/p01/yc/models/TASTE2-8B-ZH/CosyVoice-BlankEN'
+qwen_pretrain_path: '/home/chenwils/TASTE_models/TASTE2-8B-ZH/CosyVoice-BlankEN'
 qwen_pretrain_path_for_slm: ''
-qwen_pretrain_path_for_slm_7b: '/mnt/shared/p01/yc/models/TASTE2-8B-ZH/qwen2-7b'
-taste_tokenizer_backbond_path: '/mnt/shared/p01/yc/models/TASTE2-8B-ZH/distil-whisper'
+qwen_pretrain_path_for_slm_7b: '/home/chenwils/TASTE_models/TASTE2-8B-ZH/qwen2-7b'
+taste_tokenizer_backbond_path: '/home/chenwils/TASTE_models/TASTE2-8B-ZH/distil-whisper'
 path_reload_taste_stage1: ''
 token_frame_rate: 25
 token_mel_ratio: 2
