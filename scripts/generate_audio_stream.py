@@ -787,9 +787,9 @@ class TASTE2:
             im_end_token = self.frontend.tokenizer.encode('<|im_end|>',add_special_tokens = False)
             im_start_token = self.frontend.tokenizer.encode('<|im_start|>',add_special_tokens = False)
             user_token = self.frontend.tokenizer.encode('user',add_special_tokens = False)
-            """Find the first segment that produces \n + <|im_end|> pattern and return its SLM generator"""
+            """Find the first segment that produces <|im_end|> as first token and return its SLM generator"""
             # Get special tokens from frontend tokenizer
-            print(f"Searching for valid segment - newline: {newline_token}, <|im_end|>: {im_end_token}")
+            print(f"Searching for valid segment - <|im_end|>: {im_end_token}")
 
             for i, audio_segment in enumerate(audio_segments):
                 # Preprocess this segment individually
@@ -802,7 +802,7 @@ class TASTE2:
                     sampling=25,
                 )
 
-                # Test only the first 2 tokens to see if this generator has completion pattern
+                # Test only the first token to see if it's <|im_end|>
                 has_completion_pattern = False
                 test_outputs = []
 
@@ -813,34 +813,29 @@ class TASTE2:
                     # Extract text_token from output (assuming it's a tuple (text_token, taste_emb))
                     if isinstance(output, tuple) and len(output) >= 2:
                         text_token, taste_emb = output[0], output[1]
-                        
+
                         print_green(f"   📝 Text Token: {text_token} (type: {type(text_token)})")
-                        # print_green(f"   🎵 Taste Embedding: shape={taste_emb.shape if hasattr(taste_emb, 'shape') else 'N/A'}")
-                        # Check if text_token contains the completion pattern: \n + <|im_end|>
+                        # Check if text_token is <|im_end|>
                         if torch.is_tensor(text_token):
                             token_ids = text_token.flatten().tolist()
                         else:
                             token_ids = [text_token] if isinstance(text_token, int) else text_token
                         print_green(f"   🔢 Token IDs: {token_ids}")
-                        # Extract expected token values (handle lists)
-                        expected_newline = newline_token[0] if isinstance(newline_token, list) and len(newline_token) > 0 else newline_token
+                        # Extract expected token value (handle lists)
                         expected_im_end = im_end_token[0] if isinstance(im_end_token, list) and len(im_end_token) > 0 else im_end_token
 
-                        # For first token: check if it's newline
-                        if output_count == 0 and len(token_ids) > 0 and token_ids[0] == expected_newline:
-                            print_green(f"✓ Segment {i+1}: First token is \\n ({token_ids[0]})")
-                        # For second token: check if it's <|im_end|> (completing the pattern)
-                        if output_count == 1 and len(token_ids) > 0 and token_ids[0] == expected_im_end:
+                        # For first token: check if it's <|im_end|>
+                        if output_count == 0 and len(token_ids) > 0 and token_ids[0] == expected_im_end:
                             has_completion_pattern = True
-                            print_green(f"✓ Segment {i+1}: Found completion pattern \\n + <|im_end|> in first 2 tokens")
+                            print_green(f"✓ Segment {i+1}: First token is <|im_end|> ({token_ids[0]})")
                             break
 
-                    # Only test first 2 tokens
-                    if output_count >= 1:  # Stop after 2nd token (0-indexed)
+                    # Only test first token
+                    if output_count >= 0:  # Stop after 1st token (0-indexed)
                         break
 
                 if has_completion_pattern:
-                    print(f"✓ Segment {i+1}: SELECTED as the SLM generator (contains \\n + <|im_end|>)")
+                    print(f"✓ Segment {i+1}: SELECTED as the SLM generator (first token is <|im_end|>)")
                     # Create a fresh SLM generator for this segment and filter to extract only TEXT
                     raw_slm_generator = self.model.slm.inference(
                         **segment_data,
@@ -1067,6 +1062,10 @@ def process_single_file_streaming(model, audio_file, output_dir, asr_model_dir, 
             streaming_generator = model.generation_stage2_streaming(
                 audio_16k, asr_model_dir=asr_model_dir
             )
+        elif stage == 'sft':
+            streaming_generator = model.generation_sft_streaming(
+                audio_16k, asr_model_dir=asr_model_dir
+            )
         else:
             raise ValueError(f"Unsupported stage: {stage}")
         
@@ -1163,8 +1162,8 @@ def main():
     parser.add_argument('--output_dir', type=str, required=True, help='Output directory')
     parser.add_argument('--test_files', type=str, nargs='+', required=True, help='Audio/Arrow file paths (multiple files supported)')
     parser.add_argument('--asr_model_dir', type=str, default="openai/whisper-large-v3", help='ASR model')
-    parser.add_argument('--stage', type=str, choices=['1', '2'], default='1', 
-                        help='Which stage to run: 1 or 2 (default: 1)')
+    parser.add_argument('--stage', type=str, choices=['1', '2', 'sft'], default='1',
+                        help='Which stage to run: 1, 2, or sft (default: 1)')
     
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
@@ -1182,6 +1181,9 @@ def main():
     elif args.stage == '2':
         print(f"\nInitializing TASTE2 model for Stage 2 (Streaming)...")
         model = TASTE2(args.model_dir, stage=2, fp16=False)
+    elif args.stage == 'sft':
+        print(f"\nInitializing TASTE2 model for SFT (Streaming)...")
+        model = TASTE2(args.model_dir, stage='sft', fp16=False)
     
     # Process all files
     all_results = []
