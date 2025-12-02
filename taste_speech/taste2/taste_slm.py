@@ -147,9 +147,10 @@ class TasteSLMOut(nn.Module):
         fc_mu_requires_bias: bool = True,
         b_logvar_is_linear: bool = False,
         conduct_reparameterization: bool = True,
+        train_text_only: bool = False,
     ):
         """Initialize the TasteSLMOut module.
-        
+
         Args:
             llm_output_size (int): Dimension of the language model output features
             text_vocab_size (int): Size of the text vocabulary for classification
@@ -158,6 +159,7 @@ class TasteSLMOut(nn.Module):
             fc_mu_requires_bias (bool): Whether to use bias in the mu projection layer
             b_logvar_is_linear (bool): Whether to use linear layer for logvar (vs parameter)
             conduct_reparameterization (bool): Whether to apply reparameterization during training
+            train_text_only (bool): If True, skip taste loss calculation (for text-only training)
         """
         super().__init__()
 
@@ -166,6 +168,7 @@ class TasteSLMOut(nn.Module):
         self.b_logvar_is_linear = b_logvar_is_linear
         self.fc_mu_requires_bias = fc_mu_requires_bias
         self.conduct_reparameterization = conduct_reparameterization
+        self.train_text_only = train_text_only
 
         # Loss modules for text and taste predictions
         self.ce_loss_module = nn.CrossEntropyLoss(reduction="mean", ignore_index=IGNORE_ID)
@@ -304,37 +307,43 @@ class TasteSLMOut(nn.Module):
 
     def forward(
         self,
-        lm_output: torch.Tensor, 
-        text_logit: torch.Tensor, 
-        lm_text_target: torch.Tensor, 
-        lm_taste_latent_target: torch.Tensor, 
+        lm_output: torch.Tensor,
+        text_logit: torch.Tensor,
+        lm_text_target: torch.Tensor,
+        lm_taste_latent_target: torch.Tensor,
         lm_taste_mask: torch.Tensor,
     ) -> dict:
         """Forward pass computing both text and taste losses.
-        
+
         Args:
             lm_output (torch.Tensor): Output hidden states from language model
             text_logit (torch.Tensor): Predicted text logits
             lm_text_target (torch.Tensor): Target text tokens
             lm_taste_latent_target (torch.Tensor): Target taste latents
             lm_taste_mask (torch.Tensor): Mask for valid taste positions
-            
+
         Returns:
             dict: Dictionary containing loss, accuracy, and prediction values
         """
         # Compute text prediction loss using cross-entropy
         text_loss = self._calculate_loss_text_ce(text_logit, lm_text_target)
 
-        # Predict taste latent representations and get mu, logvar
-        z, mu, logvar = self.predict_taste_latent(lm_output)
-        # Compute taste prediction loss (MSE + KL divergence)
-        taste_loss = self._calculate_loss_taste_mse(z, mu, logvar, lm_taste_latent_target, lm_taste_mask)
+        if self.train_text_only:
+            # Text-only mode: skip taste loss calculation
+            loss = text_loss
+            taste_loss = torch.tensor(0.0, device=text_loss.device, dtype=text_loss.dtype)
+        else:
+            # Normal mode: compute taste loss
+            # Predict taste latent representations and get mu, logvar
+            z, mu, logvar = self.predict_taste_latent(lm_output)
+            # Compute taste prediction loss (MSE + KL divergence)
+            taste_loss = self._calculate_loss_taste_mse(z, mu, logvar, lm_taste_latent_target, lm_taste_mask)
+            # Combine losses with equal weighting
+            loss = 0.5 * text_loss + 0.5 * taste_loss
 
-        # Combine losses with equal weighting
-        loss = 0.5 * text_loss + 0.5 * taste_loss
         # Calculate text prediction accuracy
         text_acc = th_accuracy(text_logit.view(-1, self.text_vocab_size), lm_text_target, ignore_label=IGNORE_ID)
-        
+
         return {
             'loss': loss,
             'text_acc': text_acc,
@@ -548,17 +557,27 @@ class TasteSLM(nn.Module):
                 - taste_loss: Taste-specific loss component
                 - z: Predicted taste latent representations
         """
+        # Check if text-only mode is enabled (only valid in SFT mode)
+        train_text_only = (batch.get('sft_training') is True and
+                          hasattr(self.out_module, 'train_text_only') and
+                          self.out_module.train_text_only)
+
         if batch.get('sft_training') is True:
             # Switch lm_target to sft
             lm_input_target_mode = "sft"
-            
+
             # Data for recontruct
             full_text_token = batch['text_token']  # [B, L]
             full_text_token_len = batch['text_token_len']  # [B]
             full_token_message_ids = batch['token_message_ids']  # [B, L]
-            
-            # Prepare data for taste_stage1 (expand dialogue batch to message batch)
-            text_token, text_token_len, audio_feature, audio_feature_len, message_mapping = expand_conversations_to_messages(batch, device)
+
+            if train_text_only:
+                # Text-only mode: skip audio processing, just use text
+                text_token = full_text_token.to(device)
+                text_token_len = full_text_token_len.to(device)
+            else:
+                # Normal SFT: prepare data for taste_stage1 (expand dialogue batch to message batch)
+                text_token, text_token_len, audio_feature, audio_feature_len, message_mapping = expand_conversations_to_messages(batch, device)
         else:
             # Switch lm_target to pretrain
             lm_input_target_mode = "pretrain"
@@ -569,13 +588,22 @@ class TasteSLM(nn.Module):
             audio_feature_len = batch['audio_feature_len'].to(device)
 
         # Encode audio features to taste token embeddings using taste tokenizer
-        tokenized = self.taste_stage1.taste_tokenizer(text_token, text_token_len, audio_feature, audio_feature_len)
-        taste_token_emb = tokenized['taste_token_emb']
-        taste_latent = tokenized['taste_latent']
-        
+        if train_text_only:
+            # Text-only mode: create zero embeddings (skip taste tokenizer)
+            B, L = text_token.size()
+            llm_output_size = self.taste_stage1.taste_tokenizer.audio_affine_layer.out_features
+            taste_token_emb = torch.zeros(B, L, llm_output_size, device=device, dtype=torch.float32)
+            taste_latent = torch.zeros(B, L, self.d, device=device, dtype=torch.float32)
+        else:
+            # Normal mode: process audio through taste tokenizer
+            tokenized = self.taste_stage1.taste_tokenizer(text_token, text_token_len, audio_feature, audio_feature_len)
+            taste_token_emb = tokenized['taste_token_emb']
+            taste_latent = tokenized['taste_latent']
 
-        if batch.get('sft_training') is True:
+
+        if batch.get('sft_training') is True and not train_text_only:
             # Recontruct for slm training (concat message batch to dialogue batch)
+            # Skip this in text-only mode since we didn't expand conversations
             text_token, text_token_len, taste_token_emb, taste_latent = \
             reconstruct_conversations_from_messages(taste_token_emb, taste_latent, message_mapping,
                             full_text_token, full_text_token_len, full_token_message_ids,
