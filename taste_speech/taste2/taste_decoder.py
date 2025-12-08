@@ -5,7 +5,21 @@ import time
 
 import torch
 from torch import nn
-from taste_speech.taste2.cosyvoice.llm.llm import Qwen2LM, th_accuracy, IGNORE_ID
+from tensorrt_llm._torch.models.modeling_qwen import Qwen2ForCausalLM as Qwen2ForCausalLMTRT
+from taste_speech.taste2.cosyvoice.llm.llm import Qwen2LM, Qwen2Encoder, th_accuracy, IGNORE_ID
+
+
+class Qwen2EncoderTRT(Qwen2Encoder):
+    def __init__(self, pretrain_path, attn_implementation='eager', torch_dtype=torch.bfloat16, use_lora=False, lora_config=None, merge_lora_before_init=False):
+        super().__init__()
+        self.model = Qwen2ForCausalLMTRT.from_pretrained(pretrain_path, attn_implementation=attn_implementation, torch_dtype=torch_dtype)
+        self.torch_dtype = torch_dtype
+        self._use_lora = use_lora
+        self._merge_lora_before_init = merge_lora_before_init
+        self._lora_config_dict = lora_config  # Store for later use
+
+        if use_lora:
+            raise NotImplementedError()
 
 
 class TasteS3GenerationLM(Qwen2LM):
