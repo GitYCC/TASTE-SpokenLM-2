@@ -732,7 +732,7 @@ class TasteSLM(nn.Module):
                 text_emb = self.slm.forward_embed_tokens(top_text_ids.unsqueeze(0)).float()
 
                 # stop sampling text
-                if top_text_ids == stop_id:
+                if top_text_ids == self.eos_token_id:
                     break
 
                 # sampling taste

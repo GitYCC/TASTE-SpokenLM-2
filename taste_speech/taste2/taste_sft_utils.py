@@ -163,7 +163,6 @@ def apply_template_on_message(tokenizer, role, asr_text, stream = False):
         token_groups = [
             (im_start_id, -1),
             (role_ids, -1),
-            (newline_id, -1),
             (content_tokens, 0),
         ]
     else:
@@ -172,7 +171,6 @@ def apply_template_on_message(tokenizer, role, asr_text, stream = False):
             (role_ids, -1),
             (newline_id, -1),
             (content_tokens, 0),
-            (newline_id, -1),
             (im_end_id, -1)
         ]
     # Iterate over the groups and extend tokens and message IDs

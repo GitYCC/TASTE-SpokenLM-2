@@ -51,7 +51,7 @@ class TASTE2Model(CosyVoice2Model):
                     'taste_tokenizer_backbond_path': os.path.join(model_dir, 'distil-whisper'),
                     'qwen_pretrain_path_for_slm': os.path.join(model_dir, 'qwen2-1_5b'),
                     'qwen_pretrain_path_for_slm_7b': os.path.join(model_dir, 'qwen2-7b'),
-                    'slm.slm.use_lora': False,
+                    # 'slm.slm.use_lora': False,
                 }
             )
 
@@ -91,6 +91,9 @@ class TASTE2Model(CosyVoice2Model):
         self.lock = threading.Lock()
         self.session_data = {}
         self.hift_cache_dict = {}
+        # dict used to store session related variable
+        self.tts_speech_token_dict = {}
+        self.llm_end_dict = {}
 
         # Load model weights
         self._load_checkpoints(model_dir, stage)
