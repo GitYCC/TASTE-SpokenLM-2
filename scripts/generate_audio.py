@@ -25,6 +25,82 @@ def print_green(text):
     """Print text in green color"""
     print(f"\033[92m{text}\033[0m")
 
+
+def filter_structural_tokens(text_tokens, taste_embs, tokenizer):
+    """
+    Filter out structural tokens (im_start, im_end, role, newlines at boundaries)
+    to get only content tokens for audio generation and clean text.
+
+    Returns:
+        filtered_tokens: Content tokens only
+        filtered_embs: Taste embeddings for content tokens only
+        clean_text: Decoded text without structural tokens
+    """
+    # Get special token IDs
+    im_start_id = tokenizer.encode("<|im_start|>", add_special_tokens=False)[0]
+    im_end_id = tokenizer.encode("<|im_end|>", add_special_tokens=False)[0]
+    newline_id = tokenizer.encode("\n", add_special_tokens=False)[0]
+
+    # Get role token IDs (assistant, user, system)
+    role_ids = set()
+    for role in ["assistant", "user", "system"]:
+        role_ids.update(tokenizer.encode(role, add_special_tokens=False))
+
+    # Filter tokens
+    tokens_list = text_tokens[0].tolist() if text_tokens.dim() > 1 else text_tokens.tolist()
+
+    # State machine to track position in ChatML format
+    filtered_indices = []
+    i = 0
+    while i < len(tokens_list):
+        token = tokens_list[i]
+
+        # Skip im_start
+        if token == im_start_id:
+            i += 1
+            continue
+
+        # Skip im_end
+        if token == im_end_id:
+            i += 1
+            continue
+
+        # Skip role tokens
+        if token in role_ids:
+            i += 1
+            continue
+
+        # Skip newline after role (first newline after im_start+role)
+        if token == newline_id and i > 0:
+            # Check if previous tokens were im_start or role
+            if i >= 2:
+                prev_token = tokens_list[i-1]
+                if prev_token in role_ids or prev_token == im_start_id:
+                    i += 1
+                    continue
+
+        # Keep this token (it's content)
+        filtered_indices.append(i)
+        i += 1
+
+    # Extract filtered tokens and embeddings
+    if filtered_indices:
+        filtered_tokens = torch.tensor([tokens_list[i] for i in filtered_indices],
+                                      dtype=text_tokens.dtype).unsqueeze(0)
+        filtered_embs = taste_embs[:, filtered_indices, :] if taste_embs.dim() == 3 else taste_embs[filtered_indices, :]
+        if filtered_embs.dim() == 2:
+            filtered_embs = filtered_embs.unsqueeze(0)
+
+        # Decode clean text
+        clean_text = tokenizer.decode([tokens_list[i] for i in filtered_indices])
+    else:
+        # No content tokens found
+        filtered_tokens = torch.zeros(1, 0, dtype=text_tokens.dtype, device=text_tokens.device)
+        filtered_embs = torch.zeros(1, 0, taste_embs.size(-1), dtype=taste_embs.dtype, device=taste_embs.device)
+        clean_text = ""
+
+    return filtered_tokens, filtered_embs, clean_text
+
 def load_audio_data(test_file, output_dir):
     """Unified function to load audio from either arrow file or audio file"""
     assert os.path.exists(test_file)
@@ -155,7 +231,7 @@ class TASTE2:
         text_token, text_token_len = self.frontend._extract_text_token(asr_text)
 
         # Format text with role tags using apply_template_on_message
-        formatted_text_token, formatted_text_token_len, token_message_ids = self.apply_template_on_message(role, asr_text)
+        formatted_text_token, formatted_text_token_len, token_message_ids = apply_template_on_message(self.frontend.tokenizer, role, asr_text)
 
         # Extract audio features similar to _preprocess
         audio_feature, audio_feature_len = self.audio_extractor(audio_16k, [audio_16k.shape[-1]])
@@ -276,6 +352,75 @@ class TASTE2:
             'asr_text': asr_text,
             'generated_text': generated_text
         }
+        
+    @torch.inference_mode()
+    def generation_stagesft(self, audio_16k, asr_model_dir=None, text=None, min_len=5, max_len=100, stop_id=None):
+        """Generate stage 2 output"""
+        if self.stage != 'sft':
+            raise ValueError("generation_stagesft can only be called on stage sft model")
+
+        # Get ASR text
+        asr_text = text if text else self._run_asr(audio_16k, asr_model_dir)
+
+        data = self._sft_preprocess(audio_16k, asr_model_dir=asr_model_dir, text=text)
+
+        slm_output_generator = self.model.slm.inference(
+            **data,
+            min_len=min_len,
+            max_len=max_len,
+            sampling=25,
+            stop_id=stop_id
+        )
+
+        new_text_tokens, new_taste_embs = list(), list()
+        for new_text_token, new_taste_emb in slm_output_generator:
+            new_text_tokens.append(new_text_token)
+            new_taste_embs.append(new_taste_emb.squeeze())
+
+        # Combine original and new tokens
+        if new_text_tokens:
+            # Convert new tokens to tensors
+            new_text_tokens_tensor = torch.cat(new_text_tokens, dim=0).unsqueeze(0) if new_text_tokens else torch.zeros(1, 0, dtype=torch.int32)
+            new_taste_embs_tensor = torch.stack(new_taste_embs).unsqueeze(0) if new_taste_embs else torch.zeros(1, 0, 192)
+
+            # Concatenate original + new tokens
+            final_text_token = new_text_tokens_tensor.to(self.device)
+            final_text_token_len = torch.tensor([final_text_token.shape[1]], dtype=torch.int32).to(self.device)
+            final_taste_token_emb = new_taste_embs_tensor.to(self.device)
+        else:
+            # Fallback to original tokens if no new tokens generated
+            final_text_token = data['text_token']
+            final_text_token_len = data['text_token_len']
+            final_taste_token_emb = data['taste_token_emb']
+
+        # Decode the generated text (with format tokens for debugging)
+        generated_text_raw = self.frontend.tokenizer.decode(final_text_token[0].tolist())
+        print_green('Completion (raw): {}'.format(generated_text_raw))
+
+        # Filter out structural tokens for audio generation and clean text
+        filtered_tokens, filtered_embs, clean_text = filter_structural_tokens(
+            final_text_token, final_taste_token_emb, self.frontend.tokenizer
+        )
+        filtered_token_len = torch.tensor([filtered_tokens.shape[1]], dtype=torch.int32).to(self.device)
+        print_green('Completion (clean): {}'.format(clean_text))
+
+        # Generate audio using only content tokens
+        s3_tokens = list(self.taste_stage1.inference(
+            text_token=filtered_tokens.to(self.device),
+            text_token_len=filtered_token_len,
+            taste_token_emb=filtered_embs.to(self.device),
+            sampling=25,
+        ))
+        s3_tokens = torch.tensor(s3_tokens, dtype=torch.long).unsqueeze(0) if s3_tokens else torch.zeros(1, 0, dtype=torch.long)
+
+        output_audio = self._postprocess(s3_tokens, audio_16k)
+
+        # Return results with text info
+        return {
+            'audio': output_audio,
+            'asr_text': asr_text,
+            'generated_text': clean_text  # Return clean text without format tokens
+        }
 
 def process_single_file(model, audio_file, output_dir, asr_model_dir, stage):
     """Process a single audio file"""
@@ -337,6 +482,33 @@ def process_single_file(model, audio_file, output_dir, asr_model_dir, stage):
             print(f"Stage 2 Error for {audio_basename}: {e}")
             import traceback
             traceback.print_exc()
+
+    elif stage == 'sft':
+        print(f"\n=== Running Stage SFT for {audio_basename} ===")
+        try:
+            result = model.generation_stagesft(
+                audio_16k=audio_16k,
+                asr_model_dir=asr_model_dir
+            )
+            
+            print(f"ASR text: {result['asr_text']}")
+            print(f"Generated text: {result['generated_text']}")
+            
+            # Save Stage sft results
+            output_path = os.path.join(output_dir, f"{audio_basename}_stage_sft_reconstructed.mp3")
+            torchaudio.save(output_path, result['audio'].cpu(), model.sample_rate, backend='soundfile')
+            print(f"Stage sft results saved to: {output_path}")
+            
+            results['stagesft'] = {
+                'audio_path': output_path,
+                'asr_text': result['asr_text'],
+                'generated_text': result['generated_text']
+            }
+            
+        except Exception as e:
+            print(f"Stage SFT Error for {audio_basename}: {e}")
+            import traceback
+            traceback.print_exc()
     
     # Save individual file results
     json_results = {
@@ -362,8 +534,8 @@ def main():
     parser.add_argument('--output_dir', type=str, required=True, help='Output directory')
     parser.add_argument('--test_files', type=str, nargs='+', required=True, help='Audio/Arrow file paths (multiple files supported)')
     parser.add_argument('--asr_model_dir', type=str, default="openai/whisper-large-v3", help='ASR model')
-    parser.add_argument('--stage', type=str, choices=['1', '2'], default='1', 
-                        help='Which stage to run: 1 or 2 (default: 1)')
+    parser.add_argument('--stage', type=str, choices=['1', '2', 'sft'], default='1', 
+                        help='Which stage to run: 1, 2 or sft (default: 1)')
     
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
@@ -381,6 +553,9 @@ def main():
     elif args.stage == '2':
         print("\nInitializing TASTE2 model for Stage 2...")
         model = TASTE2(args.model_dir, stage=2, fp16=False)
+    elif args.stage == 'sft':
+        print("\nInitializing TASTE2 model for Stage 2...")
+        model = TASTE2(args.model_dir, stage='sft', fp16=False)
     
     # Process all files
     all_results = []
