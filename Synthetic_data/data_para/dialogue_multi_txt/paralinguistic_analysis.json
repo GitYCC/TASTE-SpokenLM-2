@@ -1,0 +1,17 @@
+{
+  "total_agent_turns": 6,
+  "turns_with_paralinguistic_tags": 3,
+  "coverage": 0.5,
+  "distribution": {
+    "gender": {},
+    "age": {},
+    "pitch": {},
+    "speed": {},
+    "volume": {},
+    "emotion": {
+      "angry": 1,
+      "anxious": 1,
+      "surprised": 1
+    }
+  }
+}

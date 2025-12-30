@@ -1,0 +1,3 @@
+User: Hi, I'm having some trouble accessing my account. I think I forgot my password and I really need to get in as soon as possible because I have something urgent I need to take care of. Can you help me reset it?
+Agent: Absolutely, I can help you with that! First, I need to verify your identity. Could you please provide me with the email address associated with your account?
+User: My email address is johndoe@example.com, and just to confirm, will this process take long? I'm really short on time and I need to get back into my account as quickly as possible.

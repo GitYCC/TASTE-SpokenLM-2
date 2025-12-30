@@ -1,0 +1,5 @@
+User: Hi, I'm calling about an order I placed two weeks ago, and I still haven't received it. The estimated delivery time was 7-10 business days, so I'm getting a bit worried - can you please check the status of my order?
+Agent: (emotion:anxious) Okay! I completely understand your concern. Let me check the status of your order right now. One moment please. 
+
+I see that there was a delay due to unforeseen circumstances. I sincerely apologize for the inconvenience this has caused you. The updated estimate for delivery is now within the next 3-5 business days. As a goodwill gesture, I’d like to offer you a small discount on your next purchase. Thank you for your patience, and I'm here to help if you have any more questions.
+User: That's a huge relief, thank you so much for looking into it and letting me know what's going on. A 3-5 business day wait is still manageable, I just needed some reassurance that it wasn't lost or anything. And wow, a discount on my next purchase is really kind of you, I appreciate that. Can you tell me a bit more about the unforeseen circumstances that caused the delay, just so I understand what happened?

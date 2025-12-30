@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "scenario1": {
+        "description": "A user contacts customer support because they forgot their password and can't access their account. They need to reset it quickly as they have an urgent task to complete. The support agent patiently guides the user through the password reset process, verifying their identity to ensure security. After the reset link is sent to the user's email, the agent stays on the line until the user confirms successful access to their account. The user expresses gratitude for the quick resolution, allowing them to proceed with their important task."
+      }
+    },
+    {
+      "scenario2": {
+        "description": "A customer is inquiring about the shipping status of an order they placed two weeks ago. They are getting anxious because the delivery was supposed to arrive within 7-10 business days. The support agent checks the order details and informs the customer that there was a delay due to unforeseen circumstances. The agent apologizes for the inconvenience and provides an updated estimate for delivery, reassuring the customer and offering a small discount on their next purchase as a goodwill gesture. The customer feels relieved and appreciates the agent’s efforts to resolve the matter."
+      }
+    }
+  ]
+}

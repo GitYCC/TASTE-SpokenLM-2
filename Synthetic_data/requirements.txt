@@ -1,0 +1,15 @@
+# Core Dependencies
+torch>=2.0.0
+torchaudio>=2.0.0
+omegaconf>=2.3.0
+hydra-core>=1.3.0
+tqdm>=4.65.0
+openai>=1.0.0
+python-dotenv>=1.0.0
+httpx>=0.24.0
+
+# Optional: For TTS (CosyVoice) - Comment out if not using TTS
+modelscope>=1.9.0
+
+# Note: CosyVoice is a local package that needs to be installed separately
+# Follow the installation instructions from the CosyVoice repository

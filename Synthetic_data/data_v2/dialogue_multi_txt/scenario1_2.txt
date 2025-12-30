@@ -1,0 +1,5 @@
+User: (calm and curious) Hi, I'm calling to check on the status of my order that was supposed to be delivered last week, could you please let me know where it is?
+Agent: (friendly and medium) Absolutely, let me check that for you right away. Just a moment, please.
+User: (thoughtful and slightly impatient) Okay, thank you, I appreciate it, can you tell me what's going on with the delivery, I was really expecting it to arrive by now?
+Agent: (friendly and understanding) I understand your concern. It looks like the package is still in transit and is scheduled to arrive later this week. I'm really sorry for the delay.
+User: (frustrated and slightly raised) That's really disappointing, this is not the first time I've had issues with delayed deliveries from your service, it seems like every time I order something it's always late, what's going on with your shipping process?

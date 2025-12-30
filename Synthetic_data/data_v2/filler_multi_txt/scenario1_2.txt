@@ -1,0 +1,21 @@
+User: (calm and curious) Hi, um, I'm calling to check on the status of my order that was supposed to be delivered, like, last week. 
+
+[pause] User: [pause]
+
+User: Could you please, uh, let me know where it is?
+
+[backchannel] Agent: Yeah. 
+
+Agent: (friendly and medium) Absolutely, let me check that for you right away. Just a moment, please.
+
+User: (thoughtful and slightly impatient) Okay, thank you, I really, really appreciate it. Can you tell me, you know, what's going on with the delivery? 
+
+[overlap] User: It was, um, really important for me to receive it on time.
+
+Agent: (friendly and understanding) I understand your concern. It looks like the package is still in transit and is scheduled to arrive later this week. I'm really sorry for the delay.
+
+User: (frustrated and slightly raised) That's really, um, disappointing. This is not the first time I've had issues with delayed deliveries from your service,
+
+[pause] User: [pause]
+
+User: it seems like, uh, every time I order something, it's always late. What's going on with your, uh, shipping process?

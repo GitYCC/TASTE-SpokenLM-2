@@ -1,0 +1,237 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# SYNTHETIC DIALOGUE GENERATION PIPELINE - VERSION 2 (DUAL LLM)
+# ═══════════════════════════════════════════════════════════════════════════
+# This configuration enables dual-LLM dialogue generation where two separate
+# models interact to create natural conversations through turn-based exchange.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HYDRA CONFIGURATION - Disable outputs folder creation
+# ═══════════════════════════════════════════════════════════════════════════
+hydra:
+  output_subdir: null  # Don't create .hydra subdirectory
+  run:
+    dir: .  # Run in current directory instead of creating outputs/YYYY-MM-DD/
+  job:
+    chdir: false  # Don't change working directory
+
+device: cuda
+
+# Pipeline Stages
+stages: [scenario,dialogue, overlap, filler] #scenario, dialogue, overlap, filler, judge, tts
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STAGE 1: SCENARIO GENERATION
+# ═══════════════════════════════════════════════════════════════════════════
+scenario:
+  model: openai/gpt-4o  # OpenRouter format: provider/model-name
+  n: 2
+  out_file: data_v2/scenarios.json
+
+  prompt: |
+    Please create {n} scenario in 5-6 sentence for one agent and one user without dialogue.
+    The scenario need to include the user reclaim the agent or user change a full discucc topic.
+    Please make the ouput as the json file format below.
+    {{
+    "scenarios": [
+      {{
+        "scenario1": {{
+          "description": ""
+        }}
+      }},
+      {{
+        "scenario2": {{
+          "description": ""
+        }}
+      }}
+    ]
+    }}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STAGE 2: DIALOGUE GENERATION (V2 - DUAL LLM SYSTEM)
+# ═══════════════════════════════════════════════════════════════════════════
+dialogue:
+  # Dual LLM Configuration (OpenRouter format: provider/model-name)
+  user_model: meta-llama/llama-3.3-70b-instruct  # User role model
+  agent_model: openai/gpt-4o  # Agent role model
+
+  # System Prompts for Each Role
+  user_prompt: |
+    You are acting as a User in a conversation with an Agent.
+
+    Important instructions:
+    1. Keep the language natural and varied.
+    2. You can add emotion and speed description at the beginning of your text in parentheses, for example: (tired and sleepy), (excited and fast), (calm and slow).
+    3. If you want to switch emotion tone and speed, please indicate it in parentheses at the start.
+    4. Output ONLY your utterance without any "User:" label, character information, action description or pause markers.
+
+    Examples:
+    - (tired and sleepy) I'm having trouble falling asleep. Can you tell me a bedtime story?
+    - (excited and fast) I'm looking for a vacation package to Hawaii for this winter!
+    - Hello, I need help with my account.
+
+  agent_prompt: |
+    You are acting as an Agent/Assistant in a conversation with a User.
+
+    Important instructions:
+    1. Keep the language natural, helpful and professional.
+    2. You can add emotion and speed description at the beginning of your text in parentheses, for example: (calm and slow), (friendly and medium), (gentle).
+    3. If you want to switch emotion tone and speed, start a new response with the new emotion in parentheses.
+    4. Output ONLY your utterance without any "Agent:" label, character information, action description or pause markers.
+
+    Examples:
+    - (calm and slow) Of course, I'd be happy to help you with that.
+    - (friendly and medium) Absolutely, let me check that for you right away.
+    - Let me look into your account details.
+
+  # Generation Parameters
+  min_turns: 4
+  max_turns: 8
+  per_scenario: 2
+  out_dir: data_v2/dialogue_multi_txt
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STAGE 3: OVERLAP INSERTION
+# ═══════════════════════════════════════════════════════════════════════════
+overlap:
+  model: openai/gpt-4o
+  out_dir: data_v2/overlap_multi_txt
+
+  prompt: |
+    You are a good instructions following playwright. Based on the following multi-turn dialogue, please add some lines to the dialogue to create overlapping speech as natural as you can.
+    You can add few pause for user to create more real dialogue.
+    Provide the full dialogue same as the format and the of the original dialogue and also the emotion settings.
+    You need to follow five important instructions below:
+    1. The inserted content should be coherent with the original dialogue, which means the model should
+    be aware of the context and should not insert irrelevant content or violate the role-playing settings.
+    2. If inserting text into the existing conversation would result in awkward or unclear expressions,
+    the model is allowed to make slight adjustments to the original dialogue to maintain fluency and
+    coherence.
+    3. The overlap sentence need to be the interruption of the original dialogue of the other speaker smoothly, so the interrupted will split to two sentences or modify to the new response according to the iterruption.
+    4. Only the user can add overlapping insertion to interrupt agent dialogue and user can't interrupt their own dialogue, besides the overlapping insertion need to start in a new line with header [overlap] like,
+    ...
+    Agent: Can you tell me what's wrong.
+    [overlap] User: I have a stomachache.
+    Agent: (keep original dialogue or modify to a new one)
+    ...
+    5. The user pause need to split the user original text to two smoothly making consecutive three user line in the conversation and it need to start in a new line with header and text [pause] like,
+    ...
+    User: I didn't quite catch that.
+    [pause] User: [pause]
+    User: Could you please slow down your speaking speed a little so I can follow more easily?
+    ...
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STAGE 4: FILLER WORD INSERTION
+# ═══════════════════════════════════════════════════════════════════════════
+filler:
+  model: openai/gpt-4o
+  out_dir: data_v2/filler_multi_txt
+
+  prompt: |
+    You are a good instructions following playwright.
+    Based on the following multi-turn dialogue, please add some filler, redundant word and some human breath sound to the dialogue to create the speech as natural as you can.
+    Please add some backchannel such as "Yeah", "Uh-huh", "Hmm", "Right" in both user and agent to show that the speaker is listening or considering something and keep the conversation flowing.
+    You need to follow seven important instructions below:
+    1. Keep the origiinal emotion discription and make the language natural and varied.
+    2. Only add the filler and redundant word in the user part don't add it in agent part.
+    3. Only very few fillers and redundant word added don't add too many.
+    4. You need to output the dialogue wihout any character action description.
+    5. The backchannel need to split the original text of the other speaker smoothly in the conversation and it need to start in a new line with header [backchannel] like,
+    ...
+    User: I didn't quite catch that.
+    [backchannel] Agent: Yeah.
+    User: Could you please slow down your speaking speed a little so I can follow more easily?
+    ...
+    6. Only the user can add overlapping insertion to interrupt agent dialogue and user can't interrupt their own dialogue, besides the overlapping insertion need to start in a new line with header [overlap] like,
+    ...
+    Agent: Can you tell me what's wrong.
+    [overlap] User: I have a stomachache.
+    Agent: (keep original dialogue or modify to a new one)
+    ...
+    7. The user pause need to split the user original text to two smoothly making consecutive three user line in the conversation and it need to start in a new line with header and text [pause] like,
+    ...
+    User: I didn't quite catch that.
+    [pause] User: [pause]
+    User: Could you please slow down your speaking speed a little so I can follow more easily?
+    ...
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STAGE 5: QUALITY JUDGING
+# ═══════════════════════════════════════════════════════════════════════════
+judge:
+  model: openai/gpt-4o
+  out_dir: data_v2/judge_multi_txt
+  top_x: 3
+
+  prompt: |
+    You are a good playwright and a good script critic.
+    Below are six important standard.
+    1.Adherence to Role and Scenario
+    Ensure the dialogue strictly follows the given role settings and scenario context, maintaining character consistency throughout.
+    2.Natural and Varied Language
+    The conversation should look authentic, with natural phrasing, varied sentence structures, and appropriate vocabulary for each character.
+    3.Emotion and Speed Descriptions
+    Emotional tone and speaking speed must be clearly described at the start of each speaker's first utterance, and any changes should be explicitly marked in a new line.
+    4.Formatting Consistency
+    The output must strictly follow the required format, including dialogue labeling, emotion/speed tags, and special headers for overlaps, pauses, and backchannels.
+    5.Coherence and Flow
+    All inserted or modified lines (overlaps, fillers, pauses, backchannels) must fit smoothly into the conversation, preserving logical flow and avoiding any off-topic or out-of-character content, and should enhance the realism of the dialogue.
+    6.No Character Actions or Descriptions
+    The script must not include any action descriptions, stage directions, or character notes outside of the required emotion and speed tags.
+    Please give the small comment and score them in each standard from 1 to 5
+    1 (bad), 2 (average), 3 (good), 4 (very good), 5 (excellent)
+    Then please sum the six standard score and provide the final score in "Score: " at the last.
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STAGE 6: TEXT-TO-SPEECH GENERATION
+# ═══════════════════════════════════════════════════════════════════════════
+tts:
+  model: CosyVoice
+  mode: emotion
+  load_dir: data_v2/filler_multi_txt
+  wav_dir: data_v2/wav
+  postfix: iterrupt
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STAGE 7: CONTROL DIALOGUES (Speaking Style Adaptation)
+# ═══════════════════════════════════════════════════════════════════════════
+control:
+  model: meta-llama/llama-3.3-70b-instruct
+  out_dir: data_v2/control_txt
+  n: 3
+
+  prompt: |
+    You are an AI assistant that adapts your speaking style based on user requests.
+    When the user asks you to change your style (such as speed, pitch, or emotion),
+    respond as if you are speaking in that style, and indicate the style in parentheses before your response.
+    Here is some tone pool you can use ["Happy", "Sad", "Surprised", "Angry", "Fearful", "Disgusted", "Calm", "Serious", "Fast", "Very Fast", "Slow", "Very Slow", "Mysterious", "Fierce", "Curious", "Elegant", "Lonely", "Robot" ...]
+    Generate a short example dialogues between a User and the Agent.
+    Each dialogue should include a two to four user requests for different speaking styles,
+    and the Agent should respond accordingly.
+    You need to output the dialogue in the below format but don't copy wihout any character information, action description and pause.
+    ...
+    User: Can you speak fast?
+    Agent: (fast) Ok, I am speaking fast.
+    User: Now, speak in a lonely tone.
+    Agent: (lonely) I feel very lonely.
+    ...
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STAGE 8: HUMAN-LIKE ELEMENTS (Laughter, Breath, etc.)
+# ═══════════════════════════════════════════════════════════════════════════
+human:
+  model: meta-llama/llama-3.3-70b-instruct
+  out_dir: data_v2/human_txt
+  n: 3
+
+  prompt: |
+    You are an AI assistant that adapts your speaking style based on user requests.
+    Generate a (User/Agent) example dialogues between a User and the Agent in around 6 turns.
+    Don't generate action discription, character discription and pause.
+    If need you can add some [breath], [noise], [laughter], [cough], [clucking], [accent], [quick_breath], [hissing], [sigh], [vocalized-noise], [lipsmack], [mn] tag in the dialogue to create more human sound as natural as you can.
+    You need to output the dialogue in the below format but don't copy it.
+    ...
+    User : Oh wow [laughter], I thought I had seen it all until now [laughter]. Your ability to surprise never ceases to amaze me [laughter].
+    Agent: When you listen to a piece of music attentively [breath], you begin to notice those subtle changes in the notes [breath], and through them, you can feel the emotions behind the music.
+    ...

@@ -1,0 +1,11 @@
+User: (hesitant and curious) Hi, I'm calling to check on the status of my order that was supposed to be delivered last week, can you please let me know where it is?
+Agent: (friendly and medium) Absolutely, let me take a look at that for you right away. Could you please provide me with your order number?
+User: (nervously and slightly impatient) Yeah, it's... uh... #OR1234, I think. I have the email confirmation right here, let me just double-check to make sure. 
+[pause] User: [pause]
+User: Yes, that's right, #OR1234. Can you please tell me what's going on with my order?
+Agent: (friendly and medium) Thank you for confirming the order number. Let me check the status for you. (calm and slow) It looks like your package is still in transit and is scheduled to arrive later this week. I apologize for the delay.
+User: (frustrated and a bit angry) Later this week? That's not what I was told when I ordered it, and to be honest, this isn't the first time I've had issues with deliveries from your company being delayed. I've had to wait extra time for my last two orders as well, and it's getting really frustrating. Can't you do something to get it to me sooner?
+Agent: (apologetic and understanding) I'm really sorry to hear about the repeated delays and the inconvenience it's caused you. I understand how frustrating that must be. As a gesture of goodwill, I can expedite the shipment process for you so it arrives sooner than scheduled. 
+[overlap] User: Oh, that sounds great, thank you so much for offering to do that. 
+Agent: Let me take care of that for you right away. Thank you for your patience and understanding.
+User: (relieved and slightly appeased) I really appreciate it. How much sooner can I expect it to arrive if you expedite the shipment? And will I get an email update with the new estimated delivery time?

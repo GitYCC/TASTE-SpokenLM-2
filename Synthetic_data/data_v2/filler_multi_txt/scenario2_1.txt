@@ -1,0 +1,21 @@
+User: (hesitant and slow) Hi, um, I'm calling because, uh, I'm moving to a different city and I need to cancel my, uh, gym membership, can you help me with that?
+
+Agent: (calm and slow) Of course, I'd be happy to assist you with that. May I ask which city you're relocating to? We might have a branch there, and I can provide you with information on transferring your membership instead of canceling.
+
+User: Oh, that's actually a great point, I hadn't thought of that. I'm moving to Denver, do you have any locations there? 
+[pause] User: [pause]
+User: And, um, how would a transfer work, would I have to sign up all over again or...?
+
+Agent: (friendly and medium) Absolutely, we do have several branches in Denver. You wouldn't need to sign up again; instead, we can seamlessly transfer your membership to the closest location. Let me check for you and see which branch would be most convenient based on your new address.
+
+[overlap] User: Oh, and what kind of deals are you offering for transfers? 
+
+Agent: Also, we have some special promotions running for new transfers, which I can tell you about.
+
+User: (excited and faster) That sounds amazing, I'd love to hear about the promotions and the locations, can you tell me more about them, like which areas of Denver they're in and what kind of deals you're offering for transfers?
+
+Agent: (friendly and medium) Sure thing! We have branches located in several convenient areas of Denver, including downtown, Cherry Creek, and near the Denver Tech Center. As for the promotions, we're currently offering a complimentary personal training session and a 10% discount on any of our wellness programs for the first month. 
+
+[backchannel] User: Oh, that's perfect. 
+
+Agent: Would you like me to arrange the transfer to the location closest to your new address?

@@ -1,0 +1,3 @@
+User: Hi, I'm having a bit of an emergency here - I've forgotten my password and I really need to get into my account as soon as possible, can you help me reset it?
+Agent: (emotion:surprised) Of course! I understand this is urgent. Let's get started on resetting your password. Could you please provide me with the email address associated with your account?
+User: That's my personal email, it's john.doe@example.com, and can you also speak a bit faster, I'm really running out of time here?
