@@ -28,13 +28,11 @@ load_dotenv()
 APIKEY = os.getenv("OPENROUTER_API_KEY")
 
 # ═══════════════════════════════════════════════════════════════════════════
-# TTS INITIALIZATION - XTTS2
+# TTS INITIALIZATION - IndexTTS2
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Import TTS model initialization
-from TTS.tts.configs.xtts_config import XttsConfig
-torch.serialization.add_safe_globals([XttsConfig])
-from TTS.api import TTS
+# Import IndexTTS2 model
+from indextts.infer_v2 import IndexTTS2
 
 # ═══════════════════════════════════════════════════════════════════════════
 # NOTE: Paralinguistic pools and control templates are now in config file
@@ -251,25 +249,33 @@ def generate_paralinguistic_dialogues(cfg):
         for dialogue_idx in range(dialogues_per_scenario):
             dialogue_turns = []
             conversation_history = []
+            control_request_info = None  # Initialize control signal (passed from User to Agent)
 
             context_info = f"Scenario: {scenario_desc}\n\n"
             num_turns = random.randint(min_turns, max_turns)
+            # Ensure num_turns is even (dialogues must end with agent response)
+            if num_turns % 2 != 0:
+                num_turns += 1
             logging.info(f"  Generating {scenario['id']}_{dialogue_idx + 1} with {num_turns} turns")
 
             for turn in range(num_turns):
                 if turn % 2 == 0:
                     # ============ USER's TURN ============
                     # RANDOM SWITCH: Decide if this user turn should include a control request
-                    # Need to ensure agent has next turn to respond (turn < num_turns - 1)
-                    can_make_control_request = turn < num_turns - 1
+                    # Only allow control requests after turn 0 (first turn should be normal greeting)
+                    # Control signal will be passed to the next agent turn
+                    can_make_control_request = turn > 0
                     is_control_request = can_make_control_request and random.random() < control_request_frequency
-                    control_request_info = None
+
+                    # Initialize control_request_info for this user turn
+                    # This will be used by the agent in the NEXT turn (turn + 1)
+                    current_turn_control_info = None
 
                     if is_control_request:
                         # Select a control target value for the fixed dimension
                         ctrl_dim, ctrl_value = select_control_target(paralinguistic_pools, control_dimension)
-                        control_request_info = (ctrl_dim, ctrl_value)
-                        logging.info(f"    [CONTROL] Turn {turn}: Requesting {ctrl_dim}={ctrl_value}")
+                        current_turn_control_info = (ctrl_dim, ctrl_value)
+                        logging.info(f"    [CONTROL] Turn {turn}: User requesting {ctrl_dim}={ctrl_value}")
 
                     if turn == 0:
                         # First turn - start normal conversation
@@ -345,6 +351,8 @@ def generate_paralinguistic_dialogues(cfg):
                     if user_utterance:
                         dialogue_turns.append(f"User: {user_utterance}")
                         conversation_history.append(f"User: {user_utterance}")
+                        # Pass control signal to next agent turn
+                        control_request_info = current_turn_control_info
                     else:
                         logging.error(f"Could not generate user response after {max_retries} retries, ending dialogue early")
                         break
@@ -560,11 +568,25 @@ def apply_audio_post_processing(audio_tensor, sample_rate, para_tags):
 
         if speed_factor != 1.0:
             logging.info(f"  -> Applying speed: {para_tags['speed']} (factor: {speed_factor})")
-            # Process each channel
+            # Process each channel with better quality settings
             processed_channels = []
             for ch in audio_np:
-                # Time-stretch without changing pitch
-                stretched = librosa.effects.time_stretch(ch, rate=speed_factor)
+                # Use pyrubberband for higher quality time-stretching (if available)
+                # Otherwise use librosa with optimized parameters
+                try:
+                    import pyrubberband
+                    # pyrubberband provides better quality than librosa's phase vocoder
+                    stretched = pyrubberband.time_stretch(ch, sample_rate, speed_factor)
+                except ImportError:
+                    # Fallback to librosa with better quality settings
+                    # Use smaller hop_length for better quality (default is 512)
+                    # Smaller values = better quality but slower processing
+                    hop_length = 256  # Reduced from default 512 for better quality
+                    stretched = librosa.effects.time_stretch(
+                        ch,
+                        rate=speed_factor,
+                        hop_length=hop_length
+                    )
                 processed_channels.append(stretched)
             audio_np = np.array(processed_channels)
 
@@ -610,46 +632,108 @@ def apply_audio_post_processing(audio_tensor, sample_rate, para_tags):
     audio_tensor = torch.from_numpy(audio_np).float()
     return audio_tensor
 
-def XTTS_gen(script, output, use_gpu=False):
+def get_emotion_reference_audio(para_tags, emotion_audio_pool_dir):
     """
-    Generate TTS audio using XTTS2 model.
-    Handles paralinguistic tags by extracting them from text.
+    Map paralinguistic tags to emotion reference audio files.
+    Uses IndexTTS-2's emotion reference audio feature (separate style prompt).
+
+    Args:
+        para_tags: Dict of paralinguistic tags (e.g., {"gender": "man"} or {"age": "elderly"})
+        emotion_audio_pool_dir: Base directory containing emotion reference audio pool
+
+    Returns:
+        Path to emotion reference audio file, or None if no tags or file not found
+
+    Audio pool structure:
+        emotion_audio_pool/
+        ├── gender/
+        │   ├── man.wav
+        │   ├── woman.wav
+        │   ├── boy.wav
+        │   └── girl.wav
+        ├── age/
+        │   ├── child.wav
+        │   ├── teenager.wav
+        │   ├── young_adult.wav
+        │   ├── middle_aged.wav
+        │   └── elderly.wav
+        └── emotion/
+            ├── happy.wav
+            ├── sad.wav
+            └── ...
+    """
+    if not para_tags:
+        return None
+
+    # Get the dimension and value (should be only ONE per utterance)
+    dimension, value = next(iter(para_tags.items()))
+
+    # Construct path to emotion reference audio
+    audio_path = Path(emotion_audio_pool_dir) / dimension / f"{value}.wav"
+
+    if audio_path.exists():
+        logging.info(f"  -> Emotion reference audio: {audio_path}")
+        return str(audio_path)
+    else:
+        logging.warning(f"  -> Emotion reference audio not found: {audio_path} (will use default)")
+        return None
+
+def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_audio_pool_dir=None):
+    """
+    Generate TTS audio using IndexTTS2 model with emotion reference audio.
+    Uses IndexTTS-2's disentangled architecture:
+    - Timbre Prompt (spk_audio_prompt): Controls speaker voice identity
+    - Style Prompt (emo_audio_prompt): Controls tone/style from reference audio
+
+    Handles paralinguistic tags by mapping them to emotion reference audio files.
 
     Args:
         script: List of (role, text) tuples where text may contain (tags)
         output: Path to save the output wav file
-        use_gpu: Whether to use GPU for TTS inference
+        tts_model: Pre-initialized IndexTTS2 model instance (reused across all files)
+        spk_audio_dir: Directory containing speaker reference audio files
+        emotion_audio_pool_dir: Directory containing emotion reference audio pool
     """
-    sample_rate = 22050
-    tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=use_gpu)
+    sample_rate = 24000  # IndexTTS2 default sample rate
+    tts = tts_model  # Use the pre-initialized model
 
-    # Speaker pools (same as syn_ver_1.py)
-    male_speakers = ['Dionisio Schuyler', 'Royston Min', 'Viktor Eka', 'Abrahan Mack',
-                     'Adde Michal', 'Baldur Sanjin', 'Craig Gutsy', 'Damien Black',
-                     'Gilberto Mathias', 'Ilkin Urbano', 'Kazuhiko Atallah', 'Torcull Diarmuid',
-                     'Viktor Menelaos', 'Zacharie Aimilios', 'Ige Behringer', 'Filip Traverse',
-                     'Damjan Chapman', 'Wulf Carlevaro', 'Aaron Dreschner', 'Kumar Dahl',
-                     'Eugenio Mataracı', 'Xavier Hayasaka', 'Luis Moray']
+    # Emotion mapping for IndexTTS2
+    # IndexTTS2 emotion vector: [happy, angry, sad, afraid, disgusted, melancholic, surprised, calm]
+    # Map all emotions from paralinguistic_pools.emotion to IndexTTS2 8-dimensional vectors
+    # Each emotion maps to SINGLE IndexTTS2 dimension (no mixing)
+    # Base vectors are 1.0 (full strength), alpha parameter controls the actual intensity
+    emotion_vectors = {
+        # Direct mappings (emotion name matches IndexTTS2 dimension)
+        "neutral": [0, 0, 0, 0, 0, 0, 0, 0],       # -> neutral (no emotion)
+        "happy": [1.0, 0, 0, 0, 0, 0, 0, 0],       # -> happy
+        "angry": [0, 1.0, 0, 0, 0, 0, 0, 0],       # -> angry
+        "sad": [0, 0, 1.0, 0, 0, 0, 0, 0],         # -> sad
+        "afraid": [0, 0, 0, 1.0, 0, 0, 0, 0],     # -> afraid
+        "disgusted": [0, 0, 0, 0, 1.0, 0, 0, 0],   # -> disgusted
+        "melancholic": [0, 0, 0, 0, 0, 1.0, 0, 0], # -> melancholic
+        "surprised": [0, 0, 0, 0, 0, 0, 1.0, 0],   # -> surprised
+        "calm": [0, 0, 0, 0, 0, 0, 0, 1.0],        # -> calm
+    }
 
-    female_speakers = ['Alison Dietlinde', 'Alexandra Hisakawa', 'Alma María', 'Ana Florence',
-                       'Asya Anara', 'Andrew Chipper', 'Annmarie Nele', 'Badr Odhiambo',
-                       'Barbora MacLean', 'Brenda Stern', 'Camilla Holmström', 'Chandra MacFarland',
-                       'Claribel Dervla', 'Daisy Studious', 'Gitta Nikolina', 'Gracie Wise',
-                       'Henriette Usha', 'Lidiya Szekeres', 'Lilya Stainthorpe', 'Maja Ruoho',
-                       'Nova Hogarth', 'Narelle Moon', 'Rosemary Okafor', 'Sofia Hellen',
-                       'Szofi Granger', 'Suad Qasim', 'Tammie Ema', 'Tammy Grit', 'Tanja Adelina',
-                       'Uta Obando', 'Vjollca Johnnie']
+    # Find available speaker audio files in spk_audio_dir
+    spk_audio_files = list(Path(spk_audio_dir).glob("*.wav"))
+    if len(spk_audio_files) < 2:
+        raise ValueError(f"Need at least 2 speaker audio files in {spk_audio_dir}. Found {len(spk_audio_files)}")
 
-    all_speakers = male_speakers + female_speakers
-    spk_A = random.choice(all_speakers)
-    while True:
-        spk_B = random.choice(all_speakers)
-        if spk_B != spk_A:
-            break
+    # Randomly select 2 different speakers
+    spk_A_audio = str(random.choice(spk_audio_files))
+    remaining = [f for f in spk_audio_files if str(f) != spk_A_audio]
+    spk_B_audio = str(random.choice(remaining))
+
+    logging.info(f"Speaker A: {spk_A_audio}")
+    logging.info(f"Speaker B: {spk_B_audio}")
+
+    # Process each dialogue turn
+    audio_segments = []
 
     for idx, (role, text) in enumerate(script, 1):
         # Assign speaker based on role (User = spk_A, Agent = spk_B)
-        spk_id = spk_A if role in ("User", "[overlap] User") else spk_B
+        spk_audio = spk_A_audio if role in ("User", "[overlap] User") else spk_B_audio
 
         # Extract paralinguistic tags from text using existing function
         clean_text, para_tags = extract_paralinguistic_tags(text)
@@ -658,48 +742,153 @@ def XTTS_gen(script, output, use_gpu=False):
         if para_tags:
             logging.info(f"Turn {idx} ({role}): Extracted tags {para_tags}")
 
-        # Generate speech with XTTS2 (no paralinguistic control at generation time)
-        wav = tts.tts(
-            text=clean_text,
-            speaker=spk_id,
-            language="en",
-        )
+        # ═══════════════════════════════════════════════════════════════════════
+        # DUAL-NODE APPROACH: Choose method based on paralinguistic dimension
+        # ═══════════════════════════════════════════════════════════════════════
+        # Node 1: EMOTION → Use emotion vectors (existing IndexTTS2 method)
+        # Node 2: GENDER/AGE → Use emotion reference audio (new disentangled method)
+        # Other dimensions (speed, pitch, volume) → Post-processing only
+        # ═══════════════════════════════════════════════════════════════════════
 
-        # Convert to tensor if needed
-        if not isinstance(wav, torch.Tensor):
-            wav = torch.tensor(wav)
-        if wav.ndim == 1:
-            wav = wav.unsqueeze(0)
+        emo_vector = None
+        emo_alpha = None
+        emo_audio_prompt = None
 
-        # Apply post-processing based on paralinguistic tags
         if para_tags:
-            wav = apply_audio_post_processing(wav, sample_rate, para_tags)
+            # Get the dimension (should be only ONE per utterance)
+            dimension = next(iter(para_tags.keys()))
+            value = para_tags[dimension]
 
-        # Create stereo channels
-        if idx == 1:
+            if dimension == "emotion":
+                # ──────── NODE 1: EMOTION VECTOR APPROACH ────────
+                emotion = value.lower()
+                emo_vector = emotion_vectors.get(emotion, emotion_vectors["neutral"])
+                emo_alpha = random.uniform(0.7,1.0)  # Random emotion influence strength
+                logging.info(f"  -> [EMOTION VECTOR] Applying emotion: {emotion} (vector: {emo_vector}, alpha: {emo_alpha:.2f})")
+
+            elif dimension in ["gender", "age"]:
+                # ──────── NODE 2: EMOTION REFERENCE AUDIO APPROACH ────────
+                if emotion_audio_pool_dir:
+                    emo_audio_prompt = get_emotion_reference_audio(para_tags, emotion_audio_pool_dir)
+                    if emo_audio_prompt:
+                        logging.info(f"  -> [EMOTION REFERENCE AUDIO] Applying {dimension}: {value}")
+                    else:
+                        logging.warning(f"  -> [EMOTION REFERENCE AUDIO] Could not find audio for {dimension}:{value}, using default voice")
+                else:
+                    logging.warning(f"  -> [EMOTION REFERENCE AUDIO] emotion_audio_pool_dir not set, skipping {dimension}:{value}")
+
+            else:
+                # Other dimensions (speed, pitch, volume) handled via post-processing only
+                logging.info(f"  -> [{dimension.upper()}] Will apply via post-processing: {value}")
+
+        # Generate temporary output path for this turn
+        temp_output = f"/tmp/indextts_turn_{idx}.wav"
+
+        # Generate speech with IndexTTS2
+        try:
+            # ═══════════════════════════════════════════════════════════════════════
+            # DUAL-NODE TTS INFERENCE
+            # ═══════════════════════════════════════════════════════════════════════
+            # Build inference kwargs based on which node is active
+            infer_kwargs = {
+                "spk_audio_prompt": spk_audio,  # Timbre prompt (speaker identity)
+                "text": clean_text,
+                "output_path": temp_output,
+                "use_random": False,
+                "verbose": False
+            }
+
+            # Node 1: Add emotion vector parameters if using emotion
+            if emo_vector is not None:
+                infer_kwargs["emo_vector"] = emo_vector
+                infer_kwargs["emo_alpha"] = emo_alpha
+
+            # Node 2: Add emotion reference audio if using gender/age
+            # NOTE: Check IndexTTS2 documentation for exact parameter name
+            # Common possibilities: emo_audio_prompt, style_audio_prompt, ref_audio_emo
+            if emo_audio_prompt is not None:
+                # Try to use emotion reference audio parameter
+                # This assumes IndexTTS2 has a parameter for emotion reference audio
+                # You may need to adjust the parameter name based on actual IndexTTS2 API
+                try:
+                    infer_kwargs["emo_audio_prompt"] = emo_audio_prompt
+                except TypeError:
+                    # If parameter not supported, try alternative names
+                    logging.warning("  -> emo_audio_prompt parameter not supported, trying style_audio_prompt")
+                    try:
+                        infer_kwargs["style_audio_prompt"] = emo_audio_prompt
+                    except TypeError:
+                        logging.error("  -> Emotion reference audio not supported by this IndexTTS2 version")
+                        # Fall back to using only speaker prompt
+                        pass
+
+            tts.infer(**infer_kwargs)
+
+            # Load generated audio
+            wav, sr = torchaudio.load(temp_output)
+
+            # Resample if necessary
+            if sr != sample_rate:
+                wav = torchaudio.functional.resample(wav, sr, sample_rate)
+
+            # Ensure mono (take first channel if stereo)
+            if wav.shape[0] > 1:
+                wav = wav[0:1, :]
+
+            # Apply post-processing based on paralinguistic tags (speed, pitch, volume)
+            if para_tags:
+                wav = apply_audio_post_processing(wav, sample_rate, para_tags)
+
+            # Store with role information for stereo placement
+            audio_segments.append((role, wav, spk_A_audio))
+
+            # Clean up temp file
+            if os.path.exists(temp_output):
+                os.remove(temp_output)
+
+        except Exception as e:
+            logging.error(f"Error generating audio for turn {idx}: {e}")
+            # Create silence as fallback
+            silence = torch.zeros(1, sample_rate)
+            audio_segments.append((role, silence, spk_A_audio))
+
+    # Combine audio segments into stereo (User=left, Agent=right)
+    l_ch = None
+    r_ch = None
+
+    for idx, (role, wav, spk_ref) in enumerate(audio_segments):
+        is_user = role in ("User", "[overlap] User")
+        is_overlap = role.strip().lower().startswith("[overlap]")
+
+        if idx == 0:
             # First utterance
-            l_ch = wav
-            r_ch = torch.zeros_like(wav)
+            if is_user:
+                l_ch = wav
+                r_ch = torch.zeros_like(wav)
+            else:
+                r_ch = wav
+                l_ch = torch.zeros_like(wav)
         else:
-            if role.strip().lower().startswith("[overlap]"):
-                # Handle overlap
+            if is_overlap:
+                # Handle overlap - reduce previous audio and overlap
                 overlap_frame = int(random.uniform(0.6, 1.0) * sample_rate)
                 padded = torch.zeros(1, wav.shape[-1] - overlap_frame)
-                if spk_id == spk_A:
+                pause = torch.zeros(1, sample_rate // 4)
+
+                if is_user:
                     l_ch = l_ch[:, :-overlap_frame]
-                    pause = torch.zeros(1, sample_rate // 4)
                     l_ch = torch.cat([l_ch, pause, wav], -1)
                     r_ch = torch.cat([r_ch, pause, padded], -1)
                 else:
                     r_ch = r_ch[:, :-overlap_frame]
-                    pause = torch.zeros(1, sample_rate // 4)
                     r_ch = torch.cat([r_ch, pause, wav], -1)
                     l_ch = torch.cat([l_ch, pause, padded], -1)
             else:
-                # Normal concatenate with pause
+                # Normal concatenation with pause
                 padded = torch.zeros_like(wav)
                 pause = torch.zeros(1, sample_rate // 4)
-                if spk_id == spk_A:
+
+                if is_user:
                     l_ch = torch.cat([l_ch, pause, wav], -1)
                     r_ch = torch.cat([r_ch, pause, padded], -1)
                 else:
@@ -710,20 +899,25 @@ def XTTS_gen(script, output, use_gpu=False):
     full_dialog = torch.cat([l_ch, r_ch], dim=0)
 
     # Save audio file
-    torchaudio.save(output, full_dialog, sample_rate)
+    torchaudio.save(str(output), full_dialog, sample_rate)
     logging.info(f"Saved TTS audio to: {output}")
 
 def tts_batch(cfg):
     """
-    Batch process dialogue text files to generate TTS audio using XTTS2.
+    Batch process dialogue text files to generate TTS audio using IndexTTS2.
     Processes files from dialogue output directory and extracts paralinguistic tags.
+    Uses dual-node approach:
+    - Emotion tags → Emotion vectors
+    - Gender/Age tags → Emotion reference audio
     """
     src_dir = Path(cfg.dialogue["out_dir"])
     wav_dir = Path(cfg.tts["wav_dir"])
     wav_dir.mkdir(parents=True, exist_ok=True)
 
-    # GPU setting from config
-    use_gpu = cfg.get("device", "cuda") == "cuda"
+    # IndexTTS2 model directory and speaker audio directory from config
+    model_dir = cfg.tts.get("model_dir", "checkpoints")
+    spk_audio_dir = cfg.tts.get("spk_audio_dir", "examples")
+    emotion_audio_pool_dir = cfg.tts.get("emotion_audio_pool_dir", None)  # NEW: Emotion reference audio pool
 
     # Create error log file
     error_log_path = wav_dir / "tts_errors.txt"
@@ -737,9 +931,44 @@ def tts_batch(cfg):
 
     logging.info(f"Processing {len(dialogue_files)} dialogue files for TTS...")
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # INITIALIZE IndexTTS2 MODEL ONCE (REUSE FOR ALL FILES)
+    # ═══════════════════════════════════════════════════════════════════════════
+    logging.info("Initializing IndexTTS2 model with optimizations...")
+    cfg_path = os.path.join(model_dir, "config.yaml")
+
+    # Check CUDA availability before initialization
+    logging.info(f"PyTorch version: {torch.__version__}")
+    logging.info(f"CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        logging.info(f"CUDA version: {torch.version.cuda}")
+        logging.info(f"GPU count: {torch.cuda.device_count()}")
+        logging.info(f"Current GPU: {torch.cuda.current_device()}")
+        logging.info(f"GPU name: {torch.cuda.get_device_name(0)}")
+
+    if not torch.cuda.is_available():
+        logging.error("=" * 80)
+        logging.error("CUDA is NOT available! TTS will run on CPU (VERY SLOW)")
+        logging.error("Please install PyTorch with CUDA support:")
+        logging.error("  pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118")
+        logging.error("=" * 80)
+        raise RuntimeError("CUDA is required but not available. Please check your PyTorch installation.")
+
+    tts_model = IndexTTS2(
+        cfg_path=cfg_path,
+        model_dir=model_dir,
+        device="cuda",  # FORCE GPU usage (will error if CUDA not available)
+        use_fp16=True,  # ENABLED: 2-3x faster inference with less VRAM
+        use_cuda_kernel=True,  # ENABLED: Faster BigVGAN vocoder with custom CUDA kernel
+        use_accel=False,  # DISABLED: Requires flash_attn (not installed)
+        use_torch_compile=False,  # DISABLED: Can cause compatibility issues
+        use_deepspeed=False  # DeepSpeed disabled (requires extra setup)
+    )
+    logging.info("IndexTTS2 model initialized successfully with all optimizations!")
+
     for txt_file in tqdm(dialogue_files, desc="TTS Generation"):
         # Output wav file path
-        wav_file_path = wav_dir / f"{txt_file.stem}_XTTS.wav"
+        wav_file_path = wav_dir / f"{txt_file.stem}_IndexTTS.wav"
 
         # Skip if already exists
         if wav_file_path.exists():
@@ -766,7 +995,13 @@ def tts_batch(cfg):
 
             # Generate TTS audio
             logging.info(f"Generating TTS for {txt_file.name}...")
-            XTTS_gen(script, wav_file_path, use_gpu=use_gpu)
+            IndexTTS_gen(
+                script,
+                wav_file_path,
+                tts_model=tts_model,  # Pass pre-initialized model
+                spk_audio_dir=spk_audio_dir,
+                emotion_audio_pool_dir=emotion_audio_pool_dir  # Pass emotion audio pool
+            )
 
         except Exception as e:
             # Log error and continue with next file
@@ -815,9 +1050,11 @@ class PipelineConfig:
     # paralinguistic_pools (loaded from config file)
     paralinguistic_pools: OmegaConf = OmegaConf.create({})
 
-    # tts (XTTS2)
+    # tts (IndexTTS2)
     tts: OmegaConf = OmegaConf.create({
         "wav_dir": "data_para/tts_audio",
+        "model_dir": "checkpoints",
+        "spk_audio_dir": "examples",
     })
 
 class Pipeline:
@@ -843,7 +1080,7 @@ class Pipeline:
             analyze_paralinguistic_distribution(self.cfg)
 
         if "tts" in st:
-            print("Generating TTS Audio (XTTS2)...")
+            print("Generating TTS Audio (IndexTTS2)...")
             tts_batch(self.cfg)
 
 # ─────────────────────────────  CLI ENTRY  ────────────────────────────────
