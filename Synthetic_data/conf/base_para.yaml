@@ -63,10 +63,12 @@ dialogue:
     You are acting as a User/Customer in a conversation with a support Agent.
 
     Important instructions:
-    1. Be natural, conversational, and realistic in your responses.
-    2. Express your concerns, questions, or needs clearly.
-    3. React naturally to the agent's responses.
-    4. Output ONLY your utterance without any "User:" label or additional formatting.
+    1. Speak naturally as in everyday conversation - be casual and spontaneous like talking to a real person.
+    2. Keep responses under 20 seconds of speech (about 60 words maximum).
+    3. Express your concerns, questions, or needs clearly.
+    4. React naturally to the agent's responses with real human emotions.
+    5. You can use contractions, filler words (e.g., "yeah", "um", "I guess"), and casual phrasing.
+    6. Output ONLY your utterance without any "User:" label or additional formatting.
 
     Examples:
     - Hi, I need help with my password reset.
@@ -77,11 +79,13 @@ dialogue:
     You are acting as a User/Customer in a conversation with a support Agent.
 
     Important instructions:
-    1. Be natural, conversational, and realistic in your responses.
-    2. You may sometimes ask the agent to change their voice (speak faster, louder, with different emotion, etc.)
-    3. When making voice control requests, be natural about it (e.g., "Can you speak a bit faster?", "Could you sound more calm?")
-    4. After the agent acknowledges your voice request, continue with the conversation topic naturally.
-    5. Output ONLY your utterance without any "User:" label or additional formatting.
+    1. Speak naturally as in everyday conversation - be casual and spontaneous like talking to a real person.
+    2. Keep responses under 20 seconds of speech (about 60 words maximum).
+    3. You may sometimes ask the agent to change their voice (speak faster, louder, with different emotion, etc.)
+    4. When making voice control requests, be natural about it (e.g., "Can you speak a bit faster?", "Could you sound more calm?")
+    5. After the agent acknowledges your voice request, continue with the conversation topic naturally.
+    6. You can use contractions, filler words (e.g., "yeah", "um", "I guess"), and casual phrasing.
+    7. Output ONLY your utterance without any "User:" label or additional formatting.
 
     Examples (normal conversation):
     - Hi, I need help with my password reset.
@@ -97,9 +101,10 @@ dialogue:
     You are acting as a Customer Support Agent/Assistant in a conversation with a User.
 
     Important instructions:
-    1. Be helpful, professional, and empathetic.
-    2. Provide clear and accurate information.
-    3. Output ONLY your utterance without any tags, labels, or additional formatting.
+    1. Speak naturally as in everyday conversation - be helpful, professional, and empathetic but conversational like a real person.
+    2. Keep responses under 20 seconds of speech (about 60 words maximum).
+    3. Provide clear and accurate information in a natural, friendly way.
+    4. Output ONLY your utterance without any tags, labels, or additional formatting.
 
     Examples:
     - Hello! I'd be happy to help you with that.
@@ -110,13 +115,14 @@ dialogue:
     You are acting as a Customer Support Agent/Assistant in a conversation with a User.
 
     Important instructions:
-    1. Be helpful, professional, and empathetic.
-    2. Provide clear and accurate information.
-    3. The user may ask you to change your voice characteristics (speak faster, calmer, louder, etc.)
-    4. When the user requests a voice change, briefly acknowledge it and then continue helping them.
-    5. When you receive paralinguistic tags in your instructions, ALWAYS include them at the start of your response IN PARENTHESES.
-    6. The paralinguistic tag will be EXACTLY ONE dimension (gender OR age OR pitch OR speed OR volume OR emotion).
-    7. Output format: (dimension:value) followed by your utterance.
+    1. Speak naturally as in everyday conversation - be helpful, professional, and empathetic but conversational like a real person.
+    2. Keep responses under 20 seconds of speech (about 60 words maximum).
+    3. Provide clear and accurate information in a natural, friendly way.
+    4. The user may ask you to change your voice characteristics (speak faster, calmer, louder, etc.)
+    5. When the user requests a voice change, briefly acknowledge it naturally and then continue helping them.
+    6. When you receive paralinguistic tags in your instructions, ALWAYS include them at the start of your response IN PARENTHESES.
+    7. The paralinguistic tag will be EXACTLY ONE dimension (gender OR age OR pitch OR speed OR volume OR emotion).
+    8. Output format: (dimension:value) followed by your utterance.
 
     Examples (acknowledging voice control with SINGLE dimension):
     - (speed:fast) Sure! Let me help you quickly with that password reset.
@@ -126,17 +132,17 @@ dialogue:
 
   # Generation Parameters
   min_turns: 4
-  max_turns: 10
+  max_turns: 8
   per_scenario: 1  # Number of dialogues to generate per scenario
   out_dir: data_para/dialogue_multi_txt  # Match old version structure
 
   # Control Mode Configuration (Random switching within dialogue)
-  control_request_frequency: 0.5  # 50% chance that user makes a voice control request on each turn (after first turn)
+  control_request_frequency: 0.8  # 50% chance that user makes a voice control request on each turn (after first turn)
 
   # Paralinguistic Dimension Selection (REQUIRED - must specify one)
   # Options: gender, age, pitch, speed, volume, emotion
   # This dimension will be used for ALL control requests in the generated dialogues
-  control_dimension: speed  # Change this to use different dimension
+  control_dimension: gender  # Change this to use different dimension
 
 # ═══════════════════════════════════════════════════════════════════════════
 # STAGE 3: PARALINGUISTIC ANALYSIS
@@ -153,15 +159,12 @@ paralinguistic_pools:
   gender:
     - man
     - woman
-    - boy
-    - girl
+    - male
+    - female
 
   age:
     - child
-    - teenager
-    - young_adult
-    - middle_aged
-    - elderly
+    - old
 
   pitch:
     - very_low
@@ -171,71 +174,106 @@ paralinguistic_pools:
     - very_high
 
   speed:
-    - very_slow
     - slow
-    - normal
     - fast
-    - very_fast
 
   volume:
-    - very_quiet
     - quiet
-    - normal
     - loud
-    - very_loud
 
   emotion:
-    - neutral
     - happy
-    - sad
     - angry
-    - excited
-    - frustrated
-    - calm
-    - anxious
-    - surprised
+    - sad
+    - afraid
     - disgusted
-    - friendly
-    - professional
+    - melancholic
+    - surprised
+    - calm
 
 # ═══════════════════════════════════════════════════════════════════════════
-# STAGE 4: TTS GENERATION (XTTS2 with POST-PROCESSING)
+# STAGE 4: TTS GENERATION (IndexTTS2 with DUAL-NODE PARALINGUISTIC CONTROL)
 # ═══════════════════════════════════════════════════════════════════════════
 tts:
   wav_dir: data_para/tts_audio  # Output directory for generated audio files
+  model_dir: index-tts/checkpoints  # Path to IndexTTS2 model checkpoints
+  spk_audio_dir: XTTS_reference  # Directory containing speaker reference audio files (with male/female/all subdirs)
+  emotion_audio_pool_dir: emo  # Emotion reference audio pool for ALL paralinguistic tags
 
   # ───────────────────────────────────────────────────────────────────────────
-  # POST-PROCESSING CONFIGURATION
+  # EMOTION REFERENCE AUDIO PARALINGUISTIC CONTROL
   # ───────────────────────────────────────────────────────────────────────────
-  # The following paralinguistic tags are applied AFTER audio generation:
-  # - SPEED: Time-stretch (very_slow: 0.5x, slow: 0.75x, normal: 1.0x, fast: 1.25x, very_fast: 1.5x)
-  # - PITCH: Pitch-shift (very_low: -4 semitones, low: -2, normal: 0, high: +2, very_high: +4)
-  # - VOLUME: Amplitude scaling (very_quiet: 0.3x, quiet: 0.6x, normal: 1.0x, loud: 1.5x, very_loud: 2.0x)
+  # All paralinguistic tags use emotion reference audio method:
+  #   - All tags (emotion, speed, volume, age, etc.) use reference audio files
+  #   - Reference audio files in emotion_audio_pool_dir (emo/)
+  #   - Leverages IndexTTS-2's disentangled timbre (speaker) and style (tone) control
+  #   - Timbre prompt (spk_audio_prompt): Speaker voice identity
+  #   - Style prompt (emo_audio_prompt): Paralinguistic characteristics from reference audio
+  #   - Multiple reference files per category, randomly selected
+  #   - NO emotion vectors, NO post-processing
   #
   # ───────────────────────────────────────────────────────────────────────────
-  # REFERENCE AUDIO POOL (TODO: Provide by user)
+  # SPEAKER REFERENCE AUDIO SETUP
   # ───────────────────────────────────────────────────────────────────────────
-  # AGE & GENDER tags will use different reference audio files for voice cloning
-  # Structure:
-  #   reference_audio_pool:
-  #     man:
-  #       - path/to/male_voice_1.wav
-  #       - path/to/male_voice_2.wav
-  #     woman:
-  #       - path/to/female_voice_1.wav
-  #       - path/to/female_voice_2.wav
-  #     child:
-  #       - path/to/child_voice_1.wav
-  #     teenager:
-  #       - path/to/teen_voice_1.wav
-  #     young_adult:
-  #       - path/to/young_adult_1.wav
-  #     middle_aged:
-  #       - path/to/middle_aged_1.wav
-  #     elderly:
-  #       - path/to/elderly_1.wav
+  # IndexTTS2 uses speaker reference audio files for voice cloning.
+  # You need at least 2 different speaker audio files (.wav) in the spk_audio_dir.
   #
-  # NOTE: User will provide reference audio pool later
+  # Place your speaker reference audio files in the directory specified by spk_audio_dir.
+  # The system will randomly select 2 different speakers for User and Agent roles.
+  #
+  # Example structure:
+  #   examples/
+  #     ├── voice_01.wav
+  #     ├── voice_02.wav
+  #     ├── voice_03.wav
+  #     └── ...
+  #
+  # NOTE: For best results, use high-quality audio samples (3-10 seconds long)
+  #       of clean speech without background noise.
+  #
+  # ───────────────────────────────────────────────────────────────────────────
+  # EMOTION REFERENCE AUDIO POOL SETUP (FOR ALL PARALINGUISTIC TAGS)
+  # ───────────────────────────────────────────────────────────────────────────
+  # The emotion reference audio pool contains reference audio files for all paralinguistic tags.
+  # Each category can have multiple reference files (randomly selected during TTS).
+  #
+  # Directory structure (under emotion_audio_pool_dir):
+  #   emo/
+  #   ├── sad/              # Emotion: sad
+  #   │   ├── sad_0.mp3
+  #   │   ├── sad_1.mp3
+  #   │   └── ...
+  #   ├── fast/             # Speed: fast
+  #   │   ├── fast_0.mp3
+  #   │   ├── fast_1.mp3
+  #   │   └── ...
+  #   ├── slow/             # Speed: slow
+  #   │   ├── slow_0.mp3
+  #   │   └── ...
+  #   ├── quiet/            # Volume: quiet
+  #   │   ├── quiet_0.mp3
+  #   │   └── ...
+  #   ├── children/         # Age: child (mapped from "child")
+  #   │   ├── children_0.mp3
+  #   │   └── ...
+  #   ├── old/              # Age: elderly (mapped from "elderly")
+  #   │   ├── old_0.mp3
+  #   │   └── ...
+  #   └── ...
+  #
+  # How it works:
+  # - When dialogue has tag (emotion:sad), the system randomly selects from emo/sad/
+  # - When dialogue has tag (speed:fast), the system randomly selects from emo/fast/
+  # - When dialogue has tag (age:child), the system maps to "children" and selects from emo/children/
+  # - The speaker voice (timbre) comes from spk_audio_dir (separate from style)
+  # - Final output = Speaker voice + Paralinguistic characteristics from reference audio
+  #
+  # Creating the audio pool:
+  # 1. Collect diverse voice samples for each category (3-10 seconds each)
+  # 2. Ensure high quality, clean audio without background noise
+  # 3. Samples should clearly represent the target characteristic
+  # 4. Multiple samples per category allow for variety (randomly selected)
+  # 5. Rename files to {category}_{idx}.mp3 format (e.g., sad_0.mp3, sad_1.mp3)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CONTROL MODE CONFIGURATION

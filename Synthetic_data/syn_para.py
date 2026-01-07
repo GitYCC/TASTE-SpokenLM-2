@@ -21,6 +21,7 @@ import torchaudio
 import librosa
 import soundfile as sf
 import numpy as np
+from scipy.signal import resample
 
 # Load environment variables from .env file
 load_dotenv()
@@ -177,20 +178,34 @@ def generate_scenarios(cfg):
 
 # ─────────────────────────────  CONTROL MODE UTILS  ──────────────────────────────
 
-def select_control_target(pools: Dict[str, List[str]], fixed_dimension: str) -> Tuple[str, str]:
+def select_control_target(pools: Dict[str, List[str]], fixed_dimension: str, current_value: str = None) -> Tuple[str, str]:
     """
     Select a paralinguistic target value for the specified dimension.
+    EXCLUDES the current value to ensure meaningful control requests.
 
     Args:
         pools: Paralinguistic dimension pools from config
         fixed_dimension: The specific dimension to use (from config)
+        current_value: Current value of this dimension (will be excluded from selection)
 
     Returns: (dimension, target_value)
              e.g., ("speed", "fast") or ("emotion", "happy")
     """
     # Use the fixed dimension from config
     dimension = fixed_dimension
-    target_value = random.choice(pools[dimension])
+    available_values = pools[dimension]
+
+    # Exclude current value if provided (can't request what you already have)
+    if current_value and current_value in available_values:
+        available_values = [v for v in available_values if v != current_value]
+        logging.info(f"    [SELECT_CONTROL] Excluding current value '{current_value}' from selection")
+
+    # If we filtered out all values, fall back to original pool (edge case)
+    if not available_values:
+        logging.warning(f"    [SELECT_CONTROL] All values filtered out, using full pool")
+        available_values = pools[dimension]
+
+    target_value = random.choice(available_values)
     return dimension, target_value
 
 # ─────────────────────────────  PARALINGUISTIC DIALOGUE GEN  ──────────────────────────────
@@ -251,6 +266,10 @@ def generate_paralinguistic_dialogues(cfg):
             conversation_history = []
             control_request_info = None  # Initialize control signal (passed from User to Agent)
 
+            # Track last emotion tag for each role (for continuity in normal mode)
+            last_user_emotion_tag = None  # Format: (dimension, value) e.g., ("emotion", "happy")
+            last_agent_emotion_tag = None
+
             context_info = f"Scenario: {scenario_desc}\n\n"
             num_turns = random.randint(min_turns, max_turns)
             # Ensure num_turns is even (dialogues must end with agent response)
@@ -272,8 +291,19 @@ def generate_paralinguistic_dialogues(cfg):
                     current_turn_control_info = None
 
                     if is_control_request:
-                        # Select a control target value for the fixed dimension
-                        ctrl_dim, ctrl_value = select_control_target(paralinguistic_pools, control_dimension)
+                        # Determine current value to exclude from selection
+                        # Check if last agent tag matches the control dimension
+                        current_value_to_exclude = None
+                        if last_agent_emotion_tag:
+                            last_dim, last_val = last_agent_emotion_tag
+                            if last_dim == control_dimension:
+                                current_value_to_exclude = last_val
+                                logging.info(f"    [CONTROL] Current agent state: {last_dim}={last_val}")
+
+                        # Select a control target value for the fixed dimension (excluding current value)
+                        ctrl_dim, ctrl_value = select_control_target(
+                            paralinguistic_pools, control_dimension, current_value_to_exclude
+                        )
                         current_turn_control_info = (ctrl_dim, ctrl_value)
                         logging.info(f"    [CONTROL] Turn {turn}: User requesting {ctrl_dim}={ctrl_value}")
 
@@ -380,13 +410,34 @@ def generate_paralinguistic_dialogues(cfg):
                             f"Format: {para_tag_str} [brief acknowledgment] [continue conversation]\n"
                         )
 
+                        # Update last emotion tag for agent
+                        last_agent_emotion_tag = (ctrl_dim, ctrl_value)
+
                         # Reset control request after processing
                         control_request_info = None
 
                     else:
-                        # USUAL MODE - Normal agent response WITHOUT tags
-                        para_tags = None
-                        para_instruction = ""
+                        # USUAL MODE - Normal agent response
+                        # Check if there's a last emotion tag to maintain continuity
+                        if last_agent_emotion_tag:
+                            # EMOTION TAG CONTINUITY: Copy the last emotion tag
+                            ctrl_dim, ctrl_value = last_agent_emotion_tag
+                            para_tags = {ctrl_dim: ctrl_value}
+                            para_tag_str = format_paralinguistic_tags(para_tags)
+
+                            # Instruction to copy the emotion tag for continuity
+                            para_instruction = (
+                                f"\n\nIMPORTANT: For emotional continuity, maintain the same {ctrl_dim} as your last response ('{ctrl_value}').\n"
+                                f"Your response MUST start with the tag in parentheses EXACTLY as shown:\n"
+                                f"{para_tag_str}\n\n"
+                                f"Format: {para_tag_str} [your response]\n"
+                                f"This ensures your voice characteristics remain consistent throughout the conversation.\n"
+                            )
+                            logging.info(f"    [CONTINUITY] Turn {turn}: Agent maintaining {ctrl_dim}={ctrl_value}")
+                        else:
+                            # No emotion tag - normal response without tags
+                            para_tags = None
+                            para_instruction = ""
 
                     history_text = "\n".join(conversation_history)
                     agent_instruction = (
@@ -453,8 +504,17 @@ def generate_paralinguistic_dialogues(cfg):
                         full_agent_turn = f"Agent: {agent_utterance}"
                         dialogue_turns.append(full_agent_turn)
 
+                        # Extract tags from agent utterance and update tracking
+                        clean_utterance, extracted_tags = extract_paralinguistic_tags(agent_utterance)
+
+                        # Update last emotion tag for agent (for continuity tracking)
+                        if extracted_tags:
+                            # Extract the dimension and value
+                            tag_dim, tag_value = next(iter(extracted_tags.items()))
+                            last_agent_emotion_tag = (tag_dim, tag_value)
+                            logging.info(f"    [TRACKING] Agent emotion tag updated: {tag_dim}={tag_value}")
+
                         # For conversation history, use clean version (without tags)
-                        clean_utterance, _ = extract_paralinguistic_tags(agent_utterance)
                         conversation_history.append(f"Agent: {clean_utterance}")
                     else:
                         logging.error(f"Could not generate agent response after {max_retries} retries, ending dialogue early")
@@ -537,6 +597,85 @@ def analyze_paralinguistic_distribution(cfg):
 
 # ────────────────────────────────  TTS - XTTS2  ────────────────────────────────────
 
+def detect_speaker_gender(spk_audio_path, spk_audio_base_dir):
+    """
+    Detect the gender of a speaker by checking if the audio file exists in male or female subdirectories.
+
+    Args:
+        spk_audio_path: Path to the speaker audio file
+        spk_audio_base_dir: Base directory containing male/ and female/ subdirectories
+
+    Returns:
+        "male" or "female" or None if not found
+    """
+    spk_filename = Path(spk_audio_path).name
+
+    # Check if file exists in male directory
+    male_path = Path(spk_audio_base_dir) / "male" / spk_filename
+    if male_path.exists():
+        logging.info(f"  -> Detected gender: male (found in male/)")
+        return "male"
+
+    # Check if file exists in female directory
+    female_path = Path(spk_audio_base_dir) / "female" / spk_filename
+    if female_path.exists():
+        logging.info(f"  -> Detected gender: female (found in female/)")
+        return "female"
+
+    logging.warning(f"  -> Could not detect gender for {spk_filename}")
+    return None
+
+def pre_detect_first_gender_tag(script):
+    """
+    Pre-scan the script to find the first gender tag in agent turns.
+    This is used to determine the initial speaker gender (opposite of first switch).
+
+    Args:
+        script: List of (role, text) tuples
+
+    Returns:
+        First gender tag value (e.g., "woman", "man") or None if no gender tags found
+    """
+    for role, text in script:
+        # Only check agent turns
+        if role in ("Agent", "[overlap] Agent"):
+            # Extract tags
+            _, para_tags = extract_paralinguistic_tags(text)
+            if para_tags and "gender" in para_tags:
+                first_gender = para_tags["gender"]
+                logging.info(f"  -> First gender tag detected: {first_gender}")
+                return first_gender
+
+    logging.info(f"  -> No gender tags found in script")
+    return None
+
+def get_opposite_gender(gender_value):
+    """
+    Get the opposite gender for initial speaker setup.
+
+    Args:
+        gender_value: Gender value from tag (e.g., "woman", "man", "female", "male")
+
+    Returns:
+        Opposite gender directory name ("male" or "female")
+    """
+    # Map to standard names
+    gender_map = {
+        "woman": "female",
+        "female": "female",
+        "man": "male",
+        "male": "male"
+    }
+
+    target_gender = gender_map.get(gender_value.lower())
+
+    if target_gender == "female":
+        return "male"  # If switching to female, start with male
+    elif target_gender == "male":
+        return "female"  # If switching to male, start with female
+    else:
+        return None
+
 def apply_audio_post_processing(audio_tensor, sample_rate, para_tags):
     """
     Apply post-processing to audio based on paralinguistic tags.
@@ -555,70 +694,75 @@ def apply_audio_post_processing(audio_tensor, sample_rate, para_tags):
     # Convert to numpy for processing
     audio_np = audio_tensor.cpu().numpy()
 
-    # Apply SPEED modification (time-stretch)
+    # Apply SPEED modification (pitch-preserving time-stretch)
     if "speed" in para_tags:
         speed_map = {
-            "very_slow": 0.5,
-            "slow": 0.75,
+            "very_slow": 0.7,
+            "slow": 0.85,
             "normal": 1.0,
-            "fast": 1.25,
-            "very_fast": 1.5
+            "fast": 1.2,
+            "very_fast": 1.4
         }
         speed_factor = speed_map.get(para_tags["speed"], 1.0)
 
         if speed_factor != 1.0:
             logging.info(f"  -> Applying speed: {para_tags['speed']} (factor: {speed_factor})")
-            # Process each channel with better quality settings
-            processed_channels = []
-            for ch in audio_np:
-                # Use pyrubberband for higher quality time-stretching (if available)
-                # Otherwise use librosa with optimized parameters
-                try:
-                    import pyrubberband
-                    # pyrubberband provides better quality than librosa's phase vocoder
-                    stretched = pyrubberband.time_stretch(ch, sample_rate, speed_factor)
-                except ImportError:
-                    # Fallback to librosa with better quality settings
-                    # Use smaller hop_length for better quality (default is 512)
-                    # Smaller values = better quality but slower processing
-                    hop_length = 256  # Reduced from default 512 for better quality
-                    stretched = librosa.effects.time_stretch(
-                        ch,
-                        rate=speed_factor,
-                        hop_length=hop_length
-                    )
-                processed_channels.append(stretched)
-            audio_np = np.array(processed_channels)
+            # Use librosa's time_stretch with pitch preservation
+            # NOTE: scipy.resample changes BOTH speed and pitch (like playing a record wrong)
+            # librosa.time_stretch changes speed while preserving pitch
+            logging.info(f"     Audio shape before: {audio_np.shape}, dtype: {audio_np.dtype}")
 
-    # Apply PITCH modification (pitch-shift)
-    if "pitch" in para_tags:
-        pitch_map = {
-            "very_low": -4,     # semitones
-            "low": -2,
-            "normal": 0,
-            "high": 2,
-            "very_high": 4
-        }
-        pitch_shift = pitch_map.get(para_tags["pitch"], 0)
-
-        if pitch_shift != 0:
-            logging.info(f"  -> Applying pitch: {para_tags['pitch']} (shift: {pitch_shift} semitones)")
             # Process each channel
             processed_channels = []
-            for ch in audio_np:
-                # Pitch-shift
-                shifted = librosa.effects.pitch_shift(ch, sr=sample_rate, n_steps=pitch_shift)
-                processed_channels.append(shifted)
+            for ch_idx, ch in enumerate(audio_np):
+                original_len = len(ch)
+
+                logging.info(f"     Channel {ch_idx}: {original_len} samples")
+                logging.info(f"     Applying pitch-preserving time stretch (rate: {speed_factor})")
+
+                # Use librosa's time_stretch (phase vocoder method)
+                # rate > 1.0 = faster, rate < 1.0 = slower
+                # This preserves pitch while changing duration
+                stretched = librosa.effects.time_stretch(ch, rate=speed_factor)
+
+                # Ensure float32 dtype
+                stretched = stretched.astype(np.float32)
+
+                processed_channels.append(stretched)
+                logging.info(f"     Channel {ch_idx} processed: {len(stretched)} samples")
+
             audio_np = np.array(processed_channels)
+            logging.info(f"     Audio shape after: {audio_np.shape}")
+
+    # Apply PITCH modification (pitch-shift)
+    # if "pitch" in para_tags:
+    #     pitch_map = {
+    #         "very_low": -4,     # semitones
+    #         "low": -2,
+    #         "normal": 0,
+    #         "high": 2,
+    #         "very_high": 4
+    #     }
+    #     pitch_shift = pitch_map.get(para_tags["pitch"], 0)
+
+    #     if pitch_shift != 0:
+    #         logging.info(f"  -> Applying pitch: {para_tags['pitch']} (shift: {pitch_shift} semitones)")
+    #         # Process each channel
+    #         processed_channels = []
+    #         for ch in audio_np:
+    #             # Pitch-shift
+    #             shifted = librosa.effects.pitch_shift(ch, sr=sample_rate, n_steps=pitch_shift)
+    #             processed_channels.append(shifted)
+    #         audio_np = np.array(processed_channels)
 
     # Apply VOLUME modification (amplitude scaling)
     if "volume" in para_tags:
         volume_map = {
-            "very_quiet": 0.3,
-            "quiet": 0.6,
+            "very_quiet": 0.2,
+            "quiet": 0.4,
             "normal": 1.0,
-            "loud": 1.5,
-            "very_loud": 2.0
+            "loud": 1.8,
+            "very_loud": 3.0
         }
         volume_factor = volume_map.get(para_tags["volume"], 1.0)
 
@@ -632,35 +776,42 @@ def apply_audio_post_processing(audio_tensor, sample_rate, para_tags):
     audio_tensor = torch.from_numpy(audio_np).float()
     return audio_tensor
 
-def get_emotion_reference_audio(para_tags, emotion_audio_pool_dir):
+def get_emotion_reference_audio(para_tags, emotion_audio_pool_dir, speaker_gender=None):
     """
     Map paralinguistic tags to emotion reference audio files.
+    Randomly selects from multiple reference files in each category.
     Uses IndexTTS-2's emotion reference audio feature (separate style prompt).
+
+    Special handling for pitch mode:
+    - Uses speaker_gender to select gender-appropriate pitch reference
+    - E.g., "high" pitch + male speaker → high_pitch_man
+    - E.g., "low" pitch + female speaker → low_pitch_woman
 
     Args:
         para_tags: Dict of paralinguistic tags (e.g., {"gender": "man"} or {"age": "elderly"})
         emotion_audio_pool_dir: Base directory containing emotion reference audio pool
+        speaker_gender: "male" or "female" (required for pitch mode)
 
     Returns:
         Path to emotion reference audio file, or None if no tags or file not found
 
     Audio pool structure:
-        emotion_audio_pool/
-        ├── gender/
-        │   ├── man.wav
-        │   ├── woman.wav
-        │   ├── boy.wav
-        │   └── girl.wav
-        ├── age/
-        │   ├── child.wav
-        │   ├── teenager.wav
-        │   ├── young_adult.wav
-        │   ├── middle_aged.wav
-        │   └── elderly.wav
-        └── emotion/
-            ├── happy.wav
-            ├── sad.wav
-            └── ...
+        emo/
+        ├── sad/
+        │   ├── sad_0.mp3
+        │   ├── sad_1.mp3
+        │   └── ...
+        ├── fast/
+        │   ├── fast_0.mp3
+        │   ├── fast_1.mp3
+        │   └── ...
+        ├── high_pitch_man/
+        │   ├── high_pitch_man_0.mp3
+        │   └── ...
+        ├── high_pitch_woman/
+        │   ├── high_pitch_woman_0.mp3
+        │   └── ...
+        └── ...
     """
     if not para_tags:
         return None
@@ -668,15 +819,60 @@ def get_emotion_reference_audio(para_tags, emotion_audio_pool_dir):
     # Get the dimension and value (should be only ONE per utterance)
     dimension, value = next(iter(para_tags.items()))
 
-    # Construct path to emotion reference audio
-    audio_path = Path(emotion_audio_pool_dir) / dimension / f"{value}.wav"
+    logging.info(f"  -> Looking for emotion reference audio: {dimension}={value}")
 
-    if audio_path.exists():
-        logging.info(f"  -> Emotion reference audio: {audio_path}")
-        return str(audio_path)
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SPECIAL HANDLING FOR PITCH MODE - GENDER-AWARE REFERENCE SELECTION
+    # ═══════════════════════════════════════════════════════════════════════════
+    if dimension == "pitch":
+        if not speaker_gender:
+            logging.warning(f"  -> ⚠️  Pitch mode requires speaker gender, but none provided. Using default.")
+            return None
+
+        # Map pitch values to gender-specific directory names
+        # E.g., "high" + "male" → "high_pitch_man"
+        #       "low" + "female" → "low_pitch_woman"
+        pitch_value = value.replace("very_", "")  # Remove "very_" prefix if present
+        gender_suffix = "man" if speaker_gender == "male" else "woman"
+        dir_name = f"{pitch_value}_pitch_{gender_suffix}"
+
+        logging.info(f"  -> Pitch mode: {value} + {speaker_gender} → {dir_name}")
+
     else:
-        logging.warning(f"  -> Emotion reference audio not found: {audio_path} (will use default)")
+        # Map config values to directory names
+        # This allows mapping "child" -> "children", "elderly" -> "old", etc.
+        value_to_dir_map = {
+            "child": "children",
+            "elderly": "old",
+            # Add more mappings as needed
+        }
+
+        # Get directory name (use mapping if exists, otherwise use value directly)
+        dir_name = value_to_dir_map.get(value, value)
+
+        if dir_name != value:
+            logging.info(f"  -> Mapped '{value}' to directory '{dir_name}'")
+
+    # Look for directory matching the tag value
+    category_dir = Path(emotion_audio_pool_dir) / dir_name
+
+    if not category_dir.exists():
+        logging.warning(f"  -> ❌ Emotion reference directory not found: {category_dir} (will use default)")
         return None
+
+    # Get all audio files in the category (.mp3 or .wav)
+    audio_files = list(category_dir.glob("*.mp3")) + list(category_dir.glob("*.wav"))
+
+    if not audio_files:
+        logging.warning(f"  -> ❌ No audio files found in {category_dir} (will use default)")
+        return None
+
+    # Randomly select one audio file
+    selected_audio = random.choice(audio_files)
+
+    logging.info(f"  -> ✓ Selected emotion reference: {selected_audio.name} from {category_dir}")
+    logging.info(f"     Full path: {selected_audio}")
+    return str(selected_audio)
 
 def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_audio_pool_dir=None):
     """
@@ -697,43 +893,81 @@ def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_au
     sample_rate = 24000  # IndexTTS2 default sample rate
     tts = tts_model  # Use the pre-initialized model
 
-    # Emotion mapping for IndexTTS2
-    # IndexTTS2 emotion vector: [happy, angry, sad, afraid, disgusted, melancholic, surprised, calm]
-    # Map all emotions from paralinguistic_pools.emotion to IndexTTS2 8-dimensional vectors
-    # Each emotion maps to SINGLE IndexTTS2 dimension (no mixing)
-    # Base vectors are 1.0 (full strength), alpha parameter controls the actual intensity
-    emotion_vectors = {
-        # Direct mappings (emotion name matches IndexTTS2 dimension)
-        "neutral": [0, 0, 0, 0, 0, 0, 0, 0],       # -> neutral (no emotion)
-        "happy": [1.0, 0, 0, 0, 0, 0, 0, 0],       # -> happy
-        "angry": [0, 1.0, 0, 0, 0, 0, 0, 0],       # -> angry
-        "sad": [0, 0, 1.0, 0, 0, 0, 0, 0],         # -> sad
-        "afraid": [0, 0, 0, 1.0, 0, 0, 0, 0],     # -> afraid
-        "disgusted": [0, 0, 0, 0, 1.0, 0, 0, 0],   # -> disgusted
-        "melancholic": [0, 0, 0, 0, 0, 1.0, 0, 0], # -> melancholic
-        "surprised": [0, 0, 0, 0, 0, 0, 1.0, 0],   # -> surprised
-        "calm": [0, 0, 0, 0, 0, 0, 0, 1.0],        # -> calm
-    }
+    # ═══════════════════════════════════════════════════════════════════════════
+    # GENDER MODE PRE-DETECTION: Find first gender tag to set initial speaker
+    # ═══════════════════════════════════════════════════════════════════════════
+    first_gender_tag = pre_detect_first_gender_tag(script)
 
-    # Find available speaker audio files in spk_audio_dir
-    spk_audio_files = list(Path(spk_audio_dir).glob("*.wav"))
+    # Find available speaker audio files
+    all_dir = Path(spk_audio_dir) / "all"
+    spk_audio_files = list(all_dir.glob("*.wav"))
     if len(spk_audio_files) < 2:
-        raise ValueError(f"Need at least 2 speaker audio files in {spk_audio_dir}. Found {len(spk_audio_files)}")
+        raise ValueError(f"Need at least 2 speaker audio files in {all_dir}. Found {len(spk_audio_files)}")
 
-    # Randomly select 2 different speakers
+    # Select User speaker (Speaker A) - always random
     spk_A_audio = str(random.choice(spk_audio_files))
     remaining = [f for f in spk_audio_files if str(f) != spk_A_audio]
-    spk_B_audio = str(random.choice(remaining))
 
-    logging.info(f"Speaker A: {spk_A_audio}")
-    logging.info(f"Speaker B: {spk_B_audio}")
+    # Select Agent speaker (Speaker B) - depends on gender mode
+    if first_gender_tag:
+        # GENDER MODE: Set initial agent speaker to OPPOSITE of first gender tag
+        initial_agent_gender = get_opposite_gender(first_gender_tag)
+        if initial_agent_gender:
+            logging.info(f"  ═══ GENDER MODE INITIALIZATION ═══")
+            logging.info(f"  -> First gender switch will be to: {first_gender_tag}")
+            logging.info(f"  -> Setting initial agent gender to: {initial_agent_gender} (opposite)")
+
+            # Sample from the opposite gender directory
+            gender_dir = Path(spk_audio_dir) / initial_agent_gender
+            gender_audio_files = list(gender_dir.glob("*.wav"))
+            if gender_audio_files:
+                spk_B_audio = str(random.choice(gender_audio_files))
+                spk_B_gender = initial_agent_gender
+                logging.info(f"  -> ✓ Initial agent speaker set: {Path(spk_B_audio).name} ({initial_agent_gender})")
+            else:
+                logging.warning(f"  -> ❌ No audio files in {gender_dir}, using random")
+                spk_B_audio = str(random.choice(remaining))
+                spk_B_gender = detect_speaker_gender(spk_B_audio, spk_audio_dir)
+        else:
+            # Fallback to random
+            spk_B_audio = str(random.choice(remaining))
+            spk_B_gender = detect_speaker_gender(spk_B_audio, spk_audio_dir)
+    else:
+        # NO GENDER MODE: Random selection
+        spk_B_audio = str(random.choice(remaining))
+        spk_B_gender = detect_speaker_gender(spk_B_audio, spk_audio_dir)
+
+    logging.info(f"Speaker A (User): {spk_A_audio}")
+    logging.info(f"Speaker B (Agent): {spk_B_audio}")
+
+    # Detect gender for User speaker (for pitch mode)
+    spk_A_gender = detect_speaker_gender(spk_A_audio, spk_audio_dir)
 
     # Process each dialogue turn
     audio_segments = []
 
+    # Track current speaker audio for each role (can change in gender mode)
+    current_spk_A_audio = spk_A_audio
+    current_spk_B_audio = spk_B_audio
+    current_spk_A_gender = spk_A_gender
+    current_spk_B_gender = spk_B_gender
+
+    # Track last para tag and emotion reference audio for each role (to avoid redundant resampling)
+    # This applies to ALL para tags (emotion, speed, volume, age, pitch) that use emotion reference
+    last_spk_A_para_tag = None  # Format: (dimension, value) e.g., ("speed", "fast"), ("emotion", "happy")
+    last_spk_A_emo_audio = None  # Last emotion reference audio path
+    last_spk_B_para_tag = None
+    last_spk_B_emo_audio = None
+
     for idx, (role, text) in enumerate(script, 1):
         # Assign speaker based on role (User = spk_A, Agent = spk_B)
-        spk_audio = spk_A_audio if role in ("User", "[overlap] User") else spk_B_audio
+        is_user = role in ("User", "[overlap] User")
+        spk_audio = current_spk_A_audio if is_user else current_spk_B_audio
+        spk_gender = current_spk_A_gender if is_user else current_spk_B_gender
+
+        # Get last para tag and reference for this role
+        last_para_tag = last_spk_A_para_tag if is_user else last_spk_B_para_tag
+        last_emo_audio = last_spk_A_emo_audio if is_user else last_spk_B_emo_audio
 
         # Extract paralinguistic tags from text using existing function
         clean_text, para_tags = extract_paralinguistic_tags(text)
@@ -743,43 +977,146 @@ def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_au
             logging.info(f"Turn {idx} ({role}): Extracted tags {para_tags}")
 
         # ═══════════════════════════════════════════════════════════════════════
-        # DUAL-NODE APPROACH: Choose method based on paralinguistic dimension
+        # PARALINGUISTIC TAG HANDLING - THREE MODES
         # ═══════════════════════════════════════════════════════════════════════
-        # Node 1: EMOTION → Use emotion vectors (existing IndexTTS2 method)
-        # Node 2: GENDER/AGE → Use emotion reference audio (new disentangled method)
-        # Other dimensions (speed, pitch, volume) → Post-processing only
+        # 1. GENDER MODE: Switch speaker reference audio (no emotion ref)
+        # 2. PITCH MODE: Use gender-aware emotion reference
+        # 3. OTHER MODES: Use emotion reference audio
         # ═══════════════════════════════════════════════════════════════════════
 
-        emo_vector = None
-        emo_alpha = None
         emo_audio_prompt = None
 
         if para_tags:
-            # Get the dimension (should be only ONE per utterance)
+            # Get the dimension and value (should be only ONE per utterance)
             dimension = next(iter(para_tags.keys()))
             value = para_tags[dimension]
 
-            if dimension == "emotion":
-                # ──────── NODE 1: EMOTION VECTOR APPROACH ────────
-                emotion = value.lower()
-                emo_vector = emotion_vectors.get(emotion, emotion_vectors["neutral"])
-                emo_alpha = random.uniform(0.7,1.0)  # Random emotion influence strength
-                logging.info(f"  -> [EMOTION VECTOR] Applying emotion: {emotion} (vector: {emo_vector}, alpha: {emo_alpha:.2f})")
+            # ─────────────────────────────────────────────────────────────────
+            # GENDER MODE: Switch speaker reference (no emotion reference)
+            # ─────────────────────────────────────────────────────────────────
+            if dimension == "gender":
+                logging.info(f"  ═══ GENDER MODE ═══")
+                logging.info(f"  -> Gender tag detected: {value}")
 
-            elif dimension in ["gender", "age"]:
-                # ──────── NODE 2: EMOTION REFERENCE AUDIO APPROACH ────────
-                if emotion_audio_pool_dir:
-                    emo_audio_prompt = get_emotion_reference_audio(para_tags, emotion_audio_pool_dir)
-                    if emo_audio_prompt:
-                        logging.info(f"  -> [EMOTION REFERENCE AUDIO] Applying {dimension}: {value}")
+                # Map gender values to directory names
+                gender_dir_map = {
+                    "man": "male",
+                    "male": "male",
+                    "woman": "female",
+                    "female": "female"
+                }
+                target_gender_dir = gender_dir_map.get(value.lower())
+
+                # Check if we need to switch (only if different from current gender)
+                if target_gender_dir and target_gender_dir != spk_gender:
+                    logging.info(f"  -> Current gender: {spk_gender}, Target gender: {target_gender_dir}")
+                    logging.info(f"  -> Gender is DIFFERENT - switching to {value} voice")
+
+                    # Sample a new speaker from the target gender directory
+                    gender_dir = Path(spk_audio_dir) / target_gender_dir
+                    gender_audio_files = list(gender_dir.glob("*.wav"))
+
+                    if gender_audio_files:
+                        # Randomly select a speaker from the target gender
+                        new_spk_audio = str(random.choice(gender_audio_files))
+                        logging.info(f"  -> ✓ Selected new speaker: {Path(new_spk_audio).name}")
+
+                        # Update current speaker audio and gender
+                        spk_audio = new_spk_audio
+                        spk_gender = target_gender_dir  # "male" or "female"
+
+                        # Update tracking variables for this role
+                        if is_user:
+                            current_spk_A_audio = new_spk_audio
+                            current_spk_A_gender = spk_gender
+                        else:
+                            current_spk_B_audio = new_spk_audio
+                            current_spk_B_gender = spk_gender
+
+                        logging.info(f"  -> ✓ Speaker reference updated for {role}")
                     else:
-                        logging.warning(f"  -> [EMOTION REFERENCE AUDIO] Could not find audio for {dimension}:{value}, using default voice")
+                        logging.warning(f"  -> ❌ No audio files found in {gender_dir}")
+                elif target_gender_dir == spk_gender:
+                    # Gender is the same - no need to switch
+                    logging.info(f"  -> Current gender is already {spk_gender} - NO SWITCH NEEDED")
                 else:
-                    logging.warning(f"  -> [EMOTION REFERENCE AUDIO] emotion_audio_pool_dir not set, skipping {dimension}:{value}")
+                    logging.warning(f"  -> ❌ Unknown gender value: {value}")
 
+                # Do NOT use emotion reference audio in gender mode
+                emo_audio_prompt = None
+
+                # Clear para tag tracking when gender changes (since gender mode doesn't use emotion ref)
+                if is_user:
+                    last_spk_A_para_tag = None
+                    last_spk_A_emo_audio = None
+                else:
+                    last_spk_B_para_tag = None
+                    last_spk_B_emo_audio = None
+
+            # ─────────────────────────────────────────────────────────────────
+            # PITCH MODE: Use gender-aware emotion reference
+            # ─────────────────────────────────────────────────────────────────
+            elif dimension == "pitch":
+                logging.info(f"  ═══ PITCH MODE ═══")
+
+                # Check if para tag is the same as last time (to avoid redundant resampling)
+                current_para_tag = (dimension, value)
+                if last_para_tag == current_para_tag and last_emo_audio:
+                    # Same para tag - REUSE the same emotion reference audio
+                    emo_audio_prompt = last_emo_audio
+                    logging.info(f"  -> Para tag unchanged ({dimension}={value}) - REUSING emotion reference")
+                    logging.info(f"  -> ✓ Reusing: {Path(emo_audio_prompt).name}")
+                else:
+                    # Different para tag - resample new emotion reference audio
+                    if emotion_audio_pool_dir:
+                        # Pass speaker gender to get_emotion_reference_audio
+                        emo_audio_prompt = get_emotion_reference_audio(
+                            para_tags, emotion_audio_pool_dir, speaker_gender=spk_gender
+                        )
+                        if emo_audio_prompt:
+                            logging.info(f"  -> ✓ Will apply {dimension}={value} using gender-aware emotion reference")
+                            # Update tracking for this role
+                            if is_user:
+                                last_spk_A_para_tag = current_para_tag
+                                last_spk_A_emo_audio = emo_audio_prompt
+                            else:
+                                last_spk_B_para_tag = current_para_tag
+                                last_spk_B_emo_audio = emo_audio_prompt
+                        else:
+                            logging.warning(f"  -> ❌ Could not find audio for {dimension}:{value}, using default voice")
+                    else:
+                        logging.warning(f"  -> ⚠️  emotion_audio_pool_dir not set, skipping {dimension}:{value}")
+
+            # ─────────────────────────────────────────────────────────────────
+            # OTHER MODES: Use emotion reference audio (emotion, speed, volume, age)
+            # ─────────────────────────────────────────────────────────────────
             else:
-                # Other dimensions (speed, pitch, volume) handled via post-processing only
-                logging.info(f"  -> [{dimension.upper()}] Will apply via post-processing: {value}")
+                logging.info(f"  ═══ EMOTION REFERENCE AUDIO MODE ═══")
+
+                # Check if para tag is the same as last time (to avoid redundant resampling)
+                current_para_tag = (dimension, value)
+                if last_para_tag == current_para_tag and last_emo_audio:
+                    # Same para tag - REUSE the same emotion reference audio
+                    emo_audio_prompt = last_emo_audio
+                    logging.info(f"  -> Para tag unchanged ({dimension}={value}) - REUSING emotion reference")
+                    logging.info(f"  -> ✓ Reusing: {Path(emo_audio_prompt).name}")
+                else:
+                    # Different para tag - resample new emotion reference audio
+                    if emotion_audio_pool_dir:
+                        emo_audio_prompt = get_emotion_reference_audio(para_tags, emotion_audio_pool_dir)
+                        if emo_audio_prompt:
+                            logging.info(f"  -> ✓ Will apply {dimension}={value} using emotion reference audio")
+                            # Update tracking for this role
+                            if is_user:
+                                last_spk_A_para_tag = current_para_tag
+                                last_spk_A_emo_audio = emo_audio_prompt
+                            else:
+                                last_spk_B_para_tag = current_para_tag
+                                last_spk_B_emo_audio = emo_audio_prompt
+                        else:
+                            logging.warning(f"  -> ❌ Could not find audio for {dimension}:{value}, using default voice")
+                    else:
+                        logging.info(f"  -> ⚠️  emotion_audio_pool_dir not set, skipping {dimension}:{value}")
 
         # Generate temporary output path for this turn
         temp_output = f"/tmp/indextts_turn_{idx}.wav"
@@ -787,9 +1124,9 @@ def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_au
         # Generate speech with IndexTTS2
         try:
             # ═══════════════════════════════════════════════════════════════════════
-            # DUAL-NODE TTS INFERENCE
+            # TTS INFERENCE WITH EMOTION REFERENCE AUDIO
             # ═══════════════════════════════════════════════════════════════════════
-            # Build inference kwargs based on which node is active
+            # Build inference kwargs
             infer_kwargs = {
                 "spk_audio_prompt": spk_audio,  # Timbre prompt (speaker identity)
                 "text": clean_text,
@@ -798,27 +1135,22 @@ def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_au
                 "verbose": False
             }
 
-            # Node 1: Add emotion vector parameters if using emotion
-            if emo_vector is not None:
-                infer_kwargs["emo_vector"] = emo_vector
-                infer_kwargs["emo_alpha"] = emo_alpha
-
-            # Node 2: Add emotion reference audio if using gender/age
-            # NOTE: Check IndexTTS2 documentation for exact parameter name
-            # Common possibilities: emo_audio_prompt, style_audio_prompt, ref_audio_emo
+            # Add emotion reference audio if available
             if emo_audio_prompt is not None:
                 # Try to use emotion reference audio parameter
                 # This assumes IndexTTS2 has a parameter for emotion reference audio
                 # You may need to adjust the parameter name based on actual IndexTTS2 API
                 try:
                     infer_kwargs["emo_audio_prompt"] = emo_audio_prompt
+                    logging.info(f"  -> 🎵 Passing emotion reference to TTS model (emo_audio_prompt)")
                 except TypeError:
                     # If parameter not supported, try alternative names
-                    logging.warning("  -> emo_audio_prompt parameter not supported, trying style_audio_prompt")
+                    logging.warning("  -> ⚠️  emo_audio_prompt parameter not supported, trying style_audio_prompt")
                     try:
                         infer_kwargs["style_audio_prompt"] = emo_audio_prompt
+                        logging.info(f"  -> 🎵 Passing emotion reference to TTS model (style_audio_prompt)")
                     except TypeError:
-                        logging.error("  -> Emotion reference audio not supported by this IndexTTS2 version")
+                        logging.error("  -> ❌ Emotion reference audio not supported by this IndexTTS2 version")
                         # Fall back to using only speaker prompt
                         pass
 
@@ -835,9 +1167,22 @@ def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_au
             if wav.shape[0] > 1:
                 wav = wav[0:1, :]
 
-            # Apply post-processing based on paralinguistic tags (speed, pitch, volume)
+            # ═══════════════════════════════════════════════════════════════════════
+            # POST-PROCESSING for volume (and other tags if needed)
+            # ═══════════════════════════════════════════════════════════════════════
+            # Volume requires BOTH emotion reference AND post-processing:
+            # - Emotion reference provides style/tone example to TTS model
+            # - Post-processing adjusts actual dB level via amplitude scaling
+            # ═══════════════════════════════════════════════════════════════════════
             if para_tags:
-                wav = apply_audio_post_processing(wav, sample_rate, para_tags)
+                try:
+                    wav = apply_audio_post_processing(wav, sample_rate, para_tags)
+                    logging.info(f"  -> ✓ Post-processing applied successfully")
+                except Exception as post_error:
+                    logging.error(f"  -> ❌ Post-processing failed: {post_error}")
+                    logging.error(f"     Error type: {type(post_error).__name__}")
+                    logging.error(f"     Keeping original audio without post-processing")
+                    # Keep original wav without post-processing instead of failing
 
             # Store with role information for stereo placement
             audio_segments.append((role, wav, spk_A_audio))
