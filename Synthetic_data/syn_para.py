@@ -22,9 +22,11 @@ import librosa
 import soundfile as sf
 import numpy as np
 from scipy.signal import resample
+from audiostretchy.stretch import AudioStretch
 
 # Load environment variables from .env file
 load_dotenv()
+
 
 APIKEY = os.getenv("OPENROUTER_API_KEY")
 
@@ -244,7 +246,11 @@ def generate_paralinguistic_dialogues(cfg):
     dialogues_per_scenario = cfg.dialogue.get("per_scenario", 3)
 
     # Control mode configuration
-    control_request_frequency = cfg.dialogue.get("control_request_frequency", 0.3)  # 30% chance per user turn
+    # Two-tier probability system:
+    # - First control request: Higher probability to ensure most dialogues have at least one control
+    # - Subsequent requests: Lower probability to avoid overwhelming the dialogue with controls
+    control_request_frequency_first = cfg.dialogue.get("control_request_frequency_first", 0.8)  # 80% for first control
+    control_request_frequency_subsequent = cfg.dialogue.get("control_request_frequency_subsequent", 0.4)  # 40% for subsequent
     control_dimension = cfg.dialogue.get("control_dimension", "speed")  # Fixed dimension from config
 
     # Load paralinguistic pools from config (single source of truth)
@@ -255,7 +261,8 @@ def generate_paralinguistic_dialogues(cfg):
     logging.info(f"  Agent Model: {agent_model}")
     logging.info(f"  Turn Range: {min_turns}-{max_turns}")
     logging.info(f"  Dialogues per Scenario: {dialogues_per_scenario}")
-    logging.info(f"  Control Request Frequency: {control_request_frequency}")
+    logging.info(f"  Control Request Frequency (First): {control_request_frequency_first}")
+    logging.info(f"  Control Request Frequency (Subsequent): {control_request_frequency_subsequent}")
     logging.info(f"  Control Dimension (Fixed): {control_dimension}")
 
     for scenario in tqdm(scenarios, desc="dialogues"):
@@ -265,6 +272,9 @@ def generate_paralinguistic_dialogues(cfg):
             dialogue_turns = []
             conversation_history = []
             control_request_info = None  # Initialize control signal (passed from User to Agent)
+
+            # Track if this dialogue has had any control request yet (for two-tier probability)
+            has_had_control_request = False
 
             # Track last emotion tag for each role (for continuity in normal mode)
             last_user_emotion_tag = None  # Format: (dimension, value) e.g., ("emotion", "happy")
@@ -283,14 +293,34 @@ def generate_paralinguistic_dialogues(cfg):
                     # RANDOM SWITCH: Decide if this user turn should include a control request
                     # Only allow control requests after turn 0 (first turn should be normal greeting)
                     # Control signal will be passed to the next agent turn
+                    # TWO-TIER PROBABILITY SYSTEM:
+                    # - First control request: Higher probability (e.g., 0.8) to ensure coverage
+                    # - Subsequent requests: Lower probability (e.g., 0.4) to avoid overwhelming dialogue
                     can_make_control_request = turn > 0
-                    is_control_request = can_make_control_request and random.random() < control_request_frequency
+
+                    if can_make_control_request:
+                        if has_had_control_request:
+                            # Already had a control request - use LOWER probability for subsequent requests
+                            is_control_request = random.random() < control_request_frequency_subsequent
+                            if is_control_request:
+                                logging.info(f"    [CONTROL DECISION] Turn {turn}: Subsequent control (prob={control_request_frequency_subsequent})")
+                        else:
+                            # First control request - use HIGHER probability
+                            is_control_request = random.random() < control_request_frequency_first
+                            if is_control_request:
+                                logging.info(f"    [CONTROL DECISION] Turn {turn}: First control (prob={control_request_frequency_first})")
+                    else:
+                        is_control_request = False
 
                     # Initialize control_request_info for this user turn
                     # This will be used by the agent in the NEXT turn (turn + 1)
                     current_turn_control_info = None
 
                     if is_control_request:
+                        # Mark that this dialogue has now had a control request
+                        if not has_had_control_request:
+                            has_had_control_request = True
+                            logging.info(f"    [CONTROL TRACKING] First control request marked for this dialogue")
                         # Determine current value to exclude from selection
                         # Check if last agent tag matches the control dimension
                         current_value_to_exclude = None
@@ -694,7 +724,7 @@ def apply_audio_post_processing(audio_tensor, sample_rate, para_tags):
     # Convert to numpy for processing
     audio_np = audio_tensor.cpu().numpy()
 
-    # Apply SPEED modification (pitch-preserving time-stretch)
+    # Apply SPEED modification (pitch-preserving time-stretch using AudioStretch)
     if "speed" in para_tags:
         speed_map = {
             "very_slow": 0.7,
@@ -707,32 +737,65 @@ def apply_audio_post_processing(audio_tensor, sample_rate, para_tags):
 
         if speed_factor != 1.0:
             logging.info(f"  -> Applying speed: {para_tags['speed']} (factor: {speed_factor})")
-            # Use librosa's time_stretch with pitch preservation
-            # NOTE: scipy.resample changes BOTH speed and pitch (like playing a record wrong)
-            # librosa.time_stretch changes speed while preserving pitch
+            logging.info(f"     Using AudioStretch (TDHS) for high-quality pitch preservation")
             logging.info(f"     Audio shape before: {audio_np.shape}, dtype: {audio_np.dtype}")
 
-            # Process each channel
-            processed_channels = []
-            for ch_idx, ch in enumerate(audio_np):
-                original_len = len(ch)
+            # AudioStretch uses file-based processing, so we need temp files
+            import tempfile
 
-                logging.info(f"     Channel {ch_idx}: {original_len} samples")
-                logging.info(f"     Applying pitch-preserving time stretch (rate: {speed_factor})")
+            # Create temporary input and output files
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_input:
+                temp_input_path = temp_input.name
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_output:
+                temp_output_path = temp_output.name
 
-                # Use librosa's time_stretch (phase vocoder method)
-                # rate > 1.0 = faster, rate < 1.0 = slower
-                # This preserves pitch while changing duration
-                stretched = librosa.effects.time_stretch(ch, rate=speed_factor)
+            try:
+                # Save current audio to temporary input file
+                # Convert numpy array back to tensor for saving
+                temp_audio_tensor = torch.from_numpy(audio_np).float()
+                torchaudio.save(temp_input_path, temp_audio_tensor, sample_rate)
 
-                # Ensure float32 dtype
-                stretched = stretched.astype(np.float32)
+                # Convert Speed to Ratio for AudioStretch
+                # Speed 2.0 (Double speed) -> Ratio 0.5 (Half length)
+                # Speed 0.5 (Half speed) -> Ratio 2.0 (Double length)
+                target_ratio = 1.0 / speed_factor
 
-                processed_channels.append(stretched)
-                logging.info(f"     Channel {ch_idx} processed: {len(stretched)} samples")
+                logging.info(f"     Speed factor: {speed_factor}, Target ratio: {target_ratio}")
 
-            audio_np = np.array(processed_channels)
-            logging.info(f"     Audio shape after: {audio_np.shape}")
+                # Apply AudioStretch with Time-Domain Harmonic Scaling (TDHS)
+                stretcher = AudioStretch()
+                stretcher.open(temp_input_path)
+
+                # stretch() parameters tuned for speech
+                # upper_freq/lower_freq help the pitch detector lock onto voice fundamentals
+                stretcher.stretch(
+                    ratio=target_ratio,
+                    gap_ratio=target_ratio * 0.5,  # Speed up silence even more (smart processing)
+                    upper_freq=333,  # Upper frequency for pitch detection
+                    lower_freq=55    # Lower frequency for pitch detection
+                )
+
+                stretcher.save(temp_output_path)
+
+                # Load the processed audio back
+                processed_audio, processed_sr = torchaudio.load(temp_output_path)
+
+                # Resample if necessary
+                if processed_sr != sample_rate:
+                    processed_audio = torchaudio.functional.resample(processed_audio, processed_sr, sample_rate)
+
+                # Convert back to numpy
+                audio_np = processed_audio.cpu().numpy()
+
+                logging.info(f"     Audio shape after: {audio_np.shape}")
+
+            finally:
+                # Clean up temporary files
+                import os
+                if os.path.exists(temp_input_path):
+                    os.remove(temp_input_path)
+                if os.path.exists(temp_output_path):
+                    os.remove(temp_output_path)
 
     # Apply PITCH modification (pitch-shift)
     # if "pitch" in para_tags:
