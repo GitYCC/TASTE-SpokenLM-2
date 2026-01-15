@@ -1,0 +1,231 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# SYNTHETIC DIALOGUE GENERATION PIPELINE - ADAPTATION MODE
+# ═══════════════════════════════════════════════════════════════════════════
+# This configuration enables ADAPTATION MODE dialogue generation where:
+# - USER has FIXED paralinguistic features throughout entire dialogue
+#   (Age, Emotion, Gender, Sarcasm) - determined at dialogue start
+# - AGENT adapts its response based on user's FIXED para tags
+# - BOTH user and agent maintain their respective para tags from START to END
+#
+# Example: User is "sad" (fixed) → Agent responds "calm" (fixed adaptive)
+#          Both maintain these emotions throughout the entire dialogue
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HYDRA CONFIGURATION - Disable outputs folder creation
+# ═══════════════════════════════════════════════════════════════════════════
+hydra:
+  output_subdir: null  # Don't create .hydra subdirectory
+  run:
+    dir: .  # Run in current directory instead of creating outputs/YYYY-MM-DD/
+  job:
+    chdir: false  # Don't change working directory
+
+device: cuda
+
+# Pipeline Stages
+stages: [scenario, dialogue, analysis, tts]  # Available: scenario, dialogue, analysis, tts
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STAGE 1: SCENARIO GENERATION
+# ═══════════════════════════════════════════════════════════════════════════
+scenario:
+  model: openai/gpt-4o-mini  # OpenRouter format: provider/model-name
+  n: 2
+  out_file: data_adaptation/scenarios.json
+
+  prompt: |
+    Please create {n} diverse customer service scenarios in 5-6 sentences for one agent and one user without dialogue.
+    The scenarios should include realistic situations where users interact with support agents.
+    Examples: technical support, product inquiries, account issues, complaints, questions about services.
+
+    Please make the output in the JSON format below:
+    {{
+    "scenarios": [
+      {{
+        "scenario1": {{
+          "description": "A user contacts customer support because they forgot their password and can't access their account. They need to reset it quickly as they have an urgent task to complete."
+        }}
+      }},
+      {{
+        "scenario2": {{
+          "description": "A customer is inquiring about the shipping status of an order they placed two weeks ago. They are getting anxious because the delivery was supposed to arrive within 7-10 business days."
+        }}
+      }}
+    ]
+    }}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STAGE 2: ADAPTATION MODE DIALOGUE GENERATION
+# ═══════════════════════════════════════════════════════════════════════════
+dialogue:
+  # Dual LLM Configuration (OpenRouter format: provider/model-name)
+  user_model: meta-llama/llama-3.3-70b-instruct  # User role model
+  agent_model: openai/gpt-4o-mini  # Agent role model
+
+  # System Prompt for User (with paralinguistic tags)
+  user_prompt: |
+    You are acting as a User/Customer in a conversation with a support Agent.
+
+    Important instructions:
+    1. Speak naturally as in everyday conversation - be casual and spontaneous like talking to a real person.
+    2. Keep responses under 20 seconds of speech (about 60 words maximum).
+    3. Express your concerns, questions, or needs clearly with appropriate emotional tone.
+    4. You can use contractions, filler words (e.g., "yeah", "um", "I guess"), and casual phrasing.
+    5. When instructed to use a specific paralinguistic tag (emotion, age, etc.), include it at the start in parentheses.
+    6. Output format when using tags: (dimension:value) followed by your utterance.
+    7. Output ONLY your utterance without any "User:" label or additional formatting.
+
+    Examples (with emotion tags):
+    - (emotion:happy) Hi! I'm so excited, I just got a notification about my order!
+    - (emotion:sad) I'm really disappointed. My package still hasn't arrived.
+    - (emotion:angry) This is frustrating! I've been waiting for two weeks!
+    - (emotion:afraid) I'm worried that something went wrong with my account.
+
+  # System Prompt for Agent (adapts to user's paralinguistic features)
+  agent_prompt: |
+    You are acting as a Customer Support Agent/Assistant in a conversation with a User.
+
+    Important instructions:
+    1. Speak naturally as in everyday conversation - be helpful, professional, and empathetic but conversational like a real person.
+    2. Keep responses under 20 seconds of speech (about 60 words maximum).
+    3. ADAPT YOUR TONE AND STYLE to match the user's emotional state and characteristics:
+       - If user is happy → respond with enthusiasm and positive energy
+       - If user is sad → respond with empathy, gentleness, and emotional support
+       - If user is angry → stay calm, apologetic, and understanding
+       - If user is afraid → respond with calm reassurance
+       - If user is a child → use simple, clear language
+       - If user is elderly → be patient and respectful
+    4. When instructed to use a specific paralinguistic tag, include it at the start in parentheses.
+    5. Output format when using tags: (dimension:value) followed by your utterance.
+    6. Output ONLY your utterance without any "Agent:" label or additional formatting.
+
+    Examples (adapting to user's emotion):
+    - (emotion:happy) That's wonderful! I'm so glad to help with your order!
+    - (emotion:calm) I understand your concern. Let me look into this for you right away.
+    - (emotion:calm) I apologize for the inconvenience. Let's get this resolved together.
+
+  # Generation Parameters
+  min_turns: 6
+  max_turns: 10
+  per_scenario: 1  # Number of dialogues to generate per scenario
+  out_dir: data_adaptation/dialogue_multi_txt
+
+  # User Paralinguistic Dimension Selection (REQUIRED - must specify one)
+  # Options: emotion, age, gender, sarcasm
+  #
+  # IMPORTANT: The selected dimension will be FIXED for the entire dialogue
+  # - One value is randomly selected at dialogue START (e.g., emotion:melancholic)
+  # - This SAME value is maintained throughout ALL turns (including turn 0!)
+  # - Agent will consistently adapt to this FIXED user state
+  #
+  # Example with emotion:melancholic (fixed):
+  #   Turn 0: User: (emotion:melancholic) Hi, I need help with... → Agent: (emotion:calm) I understand...
+  #   Turn 1: User: (emotion:melancholic) I'm disappointed... → Agent: (emotion:calm) Let me help...
+  #   Turn 2: User: (emotion:melancholic) This is frustrating... → Agent: (emotion:calm) I'll resolve...
+  #   ... (both maintain their emotions from START to END throughout entire dialogue)
+  user_para_dimension: emotion  # Change this to use different dimension
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STAGE 3: PARALINGUISTIC ANALYSIS
+# ═══════════════════════════════════════════════════════════════════════════
+# Analyzes the distribution of paralinguistic attributes across all dialogues
+# Shows both user and agent tag distributions
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PARALINGUISTIC DIMENSION POOLS
+# ═══════════════════════════════════════════════════════════════════════════
+# Define all available values for each paralinguistic dimension
+# In ADAPTATION MODE, these are used for USER utterances
+paralinguistic_pools:
+  gender:
+    - man
+    - woman
+    - male
+    - female
+
+  age:
+    - child
+    - elderly
+    # - young_adult
+    # - middle_aged
+
+  emotion:
+    - afraid
+    - amusement
+    - angry
+    - anxiety
+    - calm
+    - compassion
+    - contentment
+    - cry
+    - disappointment
+    - disgusted
+    - envy
+    - excitement
+    - frustration
+    - gratitude
+    - grief
+    - guilt
+    - happy
+    - hope
+    - melancholic
+    - pride
+    - relief
+    - sad
+    - shame
+    - surprised
+    - sarcastic
+    - hysteria
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STAGE 4: TTS GENERATION (IndexTTS2)
+# ═══════════════════════════════════════════════════════════════════════════
+tts:
+  wav_dir: data_adaptation/tts_audio  # Output directory for generated audio files
+  model_dir: index-tts/checkpoints  # Path to IndexTTS2 model checkpoints
+  spk_audio_dir: XTTS_reference  # Directory containing speaker reference audio files
+  emotion_audio_pool_dir: emo  # Emotion reference audio pool for paralinguistic tags
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # SPEAKER REFERENCE AUDIO SETUP
+  # ───────────────────────────────────────────────────────────────────────────
+  # IndexTTS2 uses speaker reference audio files for voice cloning.
+  # You need at least 2 different speaker audio files (.wav) in the spk_audio_dir.
+  #
+  # Place your speaker reference audio files in the directory specified by spk_audio_dir.
+  # The system will randomly select 2 different speakers for User and Agent roles.
+  #
+  # Example structure:
+  #   XTTS_reference/
+  #     ├── all/
+  #     │   ├── voice_01.wav
+  #     │   ├── voice_02.wav
+  #     │   └── ...
+  #     ├── male/
+  #     │   ├── male_voice_01.wav
+  #     │   └── ...
+  #     └── female/
+  #         ├── female_voice_01.wav
+  #         └── ...
+  #
+  # ───────────────────────────────────────────────────────────────────────────
+  # EMOTION REFERENCE AUDIO POOL SETUP
+  # ───────────────────────────────────────────────────────────────────────────
+  # The emotion reference audio pool contains reference audio files for paralinguistic tags.
+  # Each category can have multiple reference files (randomly selected during TTS).
+  #
+  # Directory structure (under emotion_audio_pool_dir):
+  #   emo/
+  #   ├── sad/              # Emotion: sad
+  #   │   ├── sad_0.mp3
+  #   │   ├── sad_1.mp3
+  #   │   └── ...
+  #   ├── happy/            # Emotion: happy
+  #   │   ├── happy_0.mp3
+  #   │   └── ...
+  #   ├── calm/             # Emotion: calm
+  #   │   ├── calm_0.mp3
+  #   │   └── ...
+  #   └── ...
