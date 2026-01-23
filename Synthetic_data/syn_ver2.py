@@ -7,60 +7,24 @@ import random
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Dict
-# import torch  # Commented out - only needed for TTS
+from typing import List, Dict, Tuple, Optional
+import torch
+import torchaudio
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from openai import OpenAI
 import hydra, sys
 import json
 from pathlib import Path
-# import torchaudio  # Commented out - only needed for TTS
 import time
+
+# IndexTTS2 import
+from indextts.infer_v2 import IndexTTS2
 import json
 import httpx._content
 from openai import AzureOpenAI
 from dotenv import load_dotenv
 import httpx
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# TTS IMPORTS (COMMENTED OUT - Uncomment when you need TTS functionality)
-# ═══════════════════════════════════════════════════════════════════════════
-
-# # TTS Env - XTTS
-# # from TTS.tts.configs.xtts_config import XttsConfig
-# # torch.serialization.add_safe_globals([XttsConfig])
-# # from TTS.api import TTS
-
-# # CosyVoice Env
-# os.environ["COSYVOICE_NO_AUTO_DOWNLOAD"] = "1"  # 若使用 CosyVoice ≥ 0.5.2
-# from modelscope import snapshot_download
-# # snapshot_download(
-# #     'iic/CosyVoice-300M',
-# #     local_dir='pretrained_models/CosyVoice-300M',
-# #     revision='master'
-# # )
-# snapshot_download(
-#     'iic/CosyVoice2-0.5B',
-#     local_dir='pretrained_models/CosyVoice2-0.5B',
-#     revision='master'
-# )
-# import sys, pathlib
-# MATCHA = pathlib.Path(__file__).resolve().parent / "third_party" / "Matcha-TTS"
-# src = MATCHA / "src"
-# sys.path.insert(0, str(src if src.exists() else MATCHA))
-# ROOT = pathlib.Path(__file__).resolve().parent
-# CV_DIR = ROOT / "CosyVoice"
-# if not (CV_DIR / "cosyvoice").exists() and (CV_DIR / "src" / "cosyvoice").exists():
-#     CV_DIR = CV_DIR / "src"
-# sys.path.insert(0, str(CV_DIR))
-# from cosyvoice.cli.cosyvoice import CosyVoice, CosyVoice2
-# from cosyvoice.utils.file_utils import load_wav
-# import unicodedata
-# sys.path.append('CosyVoice/third_party/Matcha-TTS')
-# os.environ['PYTHONPATH'] = 'CosyVoice/third_party/Matcha-TTS:' + os.environ.get('PYTHONPATH', '')
-# # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 import unicodedata  # Moved here - used by ascii_only function
 
@@ -146,229 +110,266 @@ def split_and_save_dialogues(llm_output, out_dir, base_filename="scenarios"):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# TTS FUNCTIONS (COMMENTED OUT - Uncomment when you need TTS functionality)
+# EMOTION UTILS - Extract emotion tags and get reference audio
 # ═══════════════════════════════════════════════════════════════════════════
 
-# def CosyVoice_gen(mode,script,output):
-# #     if mode =="emotion" or mode=="human":
-# #         cosyvoice = CosyVoice2(
-# #         "pretrained_models/CosyVoice2-0.5B",
-# #         load_jit=False, load_trt=False, fp16=False
-# #         )
-# #         spk_A = 'Rosemary Okafor'
-# #         random.seed(None)
-# #         random.seed(time.time_ns())
-# 
-# #         all_speakers = ['Dionisio Schuyler', 'Royston Min', 'Viktor Eka', 'Abrahan Mack', 'Adde Michal', 'Baldur Sanjin', 'Craig Gutsy', 'Damien Black', 'Gilberto Mathias', 'Ilkin Urbano', 'Kazuhiko Atallah', 'Torcull Diarmuid', 'Viktor Menelaos', 'Zacharie Aimilios', 'Ige Behringer', 'Filip Traverse', 'Damjan Chapman', 'Wulf Carlevaro', 'Aaron Dreschner', 'Kumar Dahl', 'Xavier Hayasaka', 'Luis Moray','Alison Dietlinde', 'Alexandra Hisakawa', 'Ana Florence', 'Asya Anara',  'Andrew Chipper', 'Annmarie Nele', 'Badr Odhiambo', 'Barbora MacLean', 'Brenda Stern',  'Chandra MacFarland', 'Claribel Dervla', 'Daisy Studious', 'Gitta Nikolina', 'Gracie Wise', 'Henriette Usha', 'Lidiya Szekeres', 'Lilya Stainthorpe', 'Maja Ruoho', 'Nova Hogarth', 'Narelle Moon', 'Rosemary Okafor', 'Sofia Hellen', 'Szofi Granger', 'Suad Qasim', 'Tammie Ema', 'Tammy Grit', 'Tanja Adelina', 'Uta Obando', 'Vjollca Johnnie'] #Ferran_simen, Ludvig Milivoj, Marcos Rudask , 'Zofija Kendrick' , 'Alma María', 'Camilla Holmström', 'Eugenio Mataracı'
-# 
-# #         spk_B = random.choice(all_speakers)
-# #     else:
-# #         cosyvoice = CosyVoice(
-# #         "pretrained_models/CosyVoice-300M_SFT",
-# #         load_jit=False, load_trt=False, fp16=False
-# #         )
-# #         all_speakers = ["英文女" ,"英文男"]
-# #         spk_A = random.choice(all_speakers)
-# #         spk_B = "英文女" if spk_A == "英文男" else "英文男"
-# 
-# 
-# #     for idx, (role, text) in enumerate(script, 1):
-# #         spk_id = spk_B if role in ("User", "[overlap] User","[pause] User","[backchannel] User") else spk_A
-# #         ref_id = spk_id.replace(" ", "_")
-# #         ref_id = ascii_only(ref_id)
-# #         emotion = ""
-# #         print(spk_id)
-# #         if text.startswith("("):
-# #                 closing = text.find(")")
-# #                 if closing != -1:
-# #                     emotion = text[1:closing].strip()
-# #                     text = text[closing+1:].strip()
-# #         if text != "[pause]":
-# #             text = text.replace("[pause]", "")
-# 
-# 
-# #         prompt_speech =  load_wav(f"XTTS_wav/all/sample_{ref_id}.wav", 16000)
-# #         if mode =="emotion":
-# #             output = str(output)
-# #             chunks = list(
-# #                 cosyvoice.inference_instruct2(text, emotion, prompt_speech, stream=False)
-# #             )
-# #         elif mode == "human":
-# #             output = str(output)
-# #             chunks = list(
-# #                 cosyvoice.inference_cross_lingual(text, prompt_speech, stream=False)
-# #             )
-# #         else:
-# #             chunks = list(
-# #                 cosyvoice.inference_sft(text, spk_id, stream=False)
-# #             )
-# #         wav = torch.cat([c["tts_speech"] for c in chunks], -1)
-# #         if wav.ndim == 1:
-# #             wav = wav.unsqueeze(0)
-# 
-# #         pause = torch.zeros(1, int(random.uniform(0.25, 0.4) * cosyvoice.sample_rate))
-# #         if role.strip().lower().startswith("[pause]"):
-# #             wav = torch.zeros(1,1)
-# #             pause = torch.zeros(1, int(random.uniform(0.6, 1.0) * cosyvoice.sample_rate))
-# #         elif role.strip().lower().startswith("[backchannel]"):
-# #             pause = torch.zeros(1, int(random.uniform(0.05, 0.15) * cosyvoice.sample_rate))
-# 
-# #         if idx == 1:
-# #             # first utterance
-# #             r_ch = wav
-# #             l_ch = torch.zeros_like(wav)
-# #         else:
-# #             if role.strip().lower().startswith("[overlap]"):
-# #                 overlap_frame = int(random.uniform(1.0, 1.6) * cosyvoice.sample_rate)
-# #                 padded = torch.zeros_like(wav)
-# #                 if spk_id == spk_A:
-# #                     # Slice l_ch for overlap and pad r_ch
-# #                     l_ch = l_ch[:, : -overlap_frame]  # Ensure l_ch has overlap frame removed
-# #                     l_ch = torch.cat([l_ch, pause, wav], -1)  # Concatenate pause + new speech for l_ch
-# #                     r_ch = torch.cat([r_ch, pause, padded], -1)  # Add silence to r_ch
-# #                     r_ch = r_ch[:, : -overlap_frame]  # Slice r_ch to remove overlap frame
-# #                 else:
-# #                     # Slice r_ch for overlap and pad l_ch
-# #                     r_ch = r_ch[:, : -overlap_frame]  # Ensure r_ch has overlap frame removed
-# #                     r_ch = torch.cat([r_ch, pause, wav], -1)  # Concatenate pause + new speech for r_ch
-# #                     l_ch = torch.cat([l_ch, pause, padded], -1)  # Add silence to l_ch
-# #                     l_ch = l_ch[:, : -overlap_frame]  # Slice l_ch to remove overlap frame
-# #             else:
-# #                 # normal concatenate with pause
-# #                 padded = torch.zeros_like(wav)
-# #                 if spk_id==spk_A:
-# #                     l_ch = torch.cat([l_ch, pause, wav], -1)
-# #                     r_ch = torch.cat([r_ch, pause, padded], -1)
-# #                 else:
-# #                     r_ch = torch.cat([r_ch, pause, wav], -1)
-# #                     l_ch = torch.cat([l_ch, pause, padded], -1)
-# 
-# 
-# #         full_dialog = torch.cat([l_ch, r_ch], dim=0)
-# 
-# #     torchaudio.save(output, full_dialog, cosyvoice.sample_rate)
-# 
-# 
-# 
-# # def XTTS_gen(script,output):
-# #     sample_rate = 22050
-# #     tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
-# 
-# #     male_speakers = ['Dionisio Schuyler', 'Royston Min', 'Viktor Eka', 'Abrahan Mack', 'Adde Michal', 'Baldur Sanjin', 'Craig Gutsy', 'Damien Black', 'Gilberto Mathias', 'Ilkin Urbano', 'Kazuhiko Atallah', 'Torcull Diarmuid', 'Viktor Menelaos', 'Zacharie Aimilios', 'Ige Behringer', 'Filip Traverse', 'Damjan Chapman', 'Wulf Carlevaro', 'Aaron Dreschner', 'Kumar Dahl', 'Eugenio Mataracı', 'Xavier Hayasaka', 'Luis Moray'] #Ferran_simen, Ludvig Milivoj, Marcos Rudaski
-# 
-# #     female_speakers = ['Alison Dietlinde', 'Alexandra Hisakawa', 'Alma María', 'Ana Florence', 'Asya Anara',  'Andrew Chipper', 'Annmarie Nele', 'Badr Odhiambo', 'Barbora MacLean', 'Brenda Stern', 'Camilla Holmström', 'Chandra MacFarland', 'Claribel Dervla', 'Daisy Studious', 'Gitta Nikolina', 'Gracie Wise', 'Henriette Usha', 'Lidiya Szekeres', 'Lilya Stainthorpe', 'Maja Ruoho', 'Nova Hogarth', 'Narelle Moon', 'Rosemary Okafor', 'Sofia Hellen', 'Szofi Granger', 'Suad Qasim', 'Tammie Ema', 'Tammy Grit', 'Tanja Adelina', 'Uta Obando', 'Vjollca Johnnie'] #, 'Zofija Kendrick'
-# 
-# #     all_speakers = male_speakers + female_speakers
-# #     spk_A = random.choice(all_speakers)
-# #     while True:
-# #         spk_B = random.choice(all_speakers)
-# #         if spk_B != spk_A:
-# #             break
-# 
-# #     for idx, (role, text) in enumerate(script, 1):
-# #         spk_id = spk_A if role in ("User", "[overlap] User") else spk_B
-# 
-# #         wav = tts.tts(
-# #             text=text,
-# #             speaker=spk_id,
-# #             language="en",
-# #         )
-# 
-# #         if wav.ndim == 1:
-# #             wav = wav.unsqueeze(0)
-# 
-# #         if idx == 1:
-# #             # first utterance
-# #             l_ch = wav
-# #             r_ch = torch.zeros_like(wav)
-# #         else:
-# #             if role.strip().lower().startswith("[overlap]"):
-# #                 overlap_frame = int(random.uniform(0.6, 1) * sample_rate)
-# #                 padded = torch.zeros(1, wav.shape[-1] - overlap_frame)
-# #                 if spk_id==spk_A:
-# #                     l_ch = l_ch[ : , : - overlap_frame ]
-# #                     l_ch = torch.cat([l_ch, pause, wav], -1)
-# #                     r_ch = torch.cat([r_ch, pause, padded], -1)
-# #                 else:
-# #                     r_ch = l_ch[ : , : - overlap_frame ]
-# #                     r_ch = torch.cat([l_ch, pause, wav], -1)
-# #                     l_ch = torch.cat([r_ch, pause, padded], -1)
-# #             else:
-# #                 # normal concatenate with pause
-# #                 padded = torch.zeros_like(wav)
-# #                 pause = torch.zeros(1, sample_rate // 4)
-# #                 if spk_id==spk_A:
-# #                     l_ch = torch.cat([l_ch, pause, wav], -1)
-# #                     r_ch = torch.cat([r_ch, pause, padded], -1)
-# #                 else:
-# #                     r_ch = torch.cat([r_ch, pause, wav], -1)
-# #                     l_ch = torch.cat([l_ch, pause, padded], -1)
-# 
-# #             full_dialog = torch.cat([l_ch, r_ch], dim=0)
-# 
-# #     torchaudio.save(output, full_dialog, sample_rate)
-# #     torchaudio.save("l_ch.wav", l_ch, sample_rate)
-# #     torchaudio.save("r_ch.wav", r_ch, sample_rate)
-# 
-# 
-# 
-# # ──────────────────────────────  LLM UTILS  ────────────────────────────────
-# # def chat_completion(model_name: str, messages: List[Dict], **gen_kwargs) -> str:
-#     def encode_json(data):
-#         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-#         headers = {
-#             "Content-Length": str(len(body)),
-#             "Content-Type": "application/json; charset=utf-8",
-#         }
-#         return headers, httpx._content.ByteStream(body)
+def extract_paralinguistic_tags(text: str) -> Tuple[str, Optional[Dict[str, str]]]:
+    """
+    Extract emotion tags from parentheses format.
+    Format: (emotion:happy) utterance text
+    Returns: (clean_text, tags_dict)
+    """
+    if text.startswith("("):
+        closing = text.find(")")
+        if closing != -1:
+            tag_string = text[1:closing].strip()
+            clean_text = text[closing+1:].strip()
+
+            tags = {}
+            for pair in tag_string.split(','):
+                if ':' in pair:
+                    key, value = pair.strip().split(':', 1)
+                    tags[key.strip()] = value.strip()
+
+            return clean_text, tags
+
+    return text, None
 
 
-#     load_dotenv()
-#     httpx._content.encode_json = encode_json
+def get_emotion_reference_audio(emotion_value: str, emotion_audio_pool_dir: str) -> Optional[str]:
+    """
+    Map emotion value to emotion reference audio files.
+    Randomly selects from multiple reference files in each emotion category.
 
-#     # Update these values with your own
-#     api_key = os.getenv("API_KEY")
-#     user_id = os.getenv("USER_ID")
-#     endpoint_url = os.getenv("ENDPOINT_URL")
-#     model = model_name
+    Args:
+        emotion_value: Emotion value (e.g., "happy", "sad", "calm")
+        emotion_audio_pool_dir: Base directory containing emotion reference audio pool
 
-#     # Set the environment variable for the API key
-#     os.environ["AZURE_OPENAI_KEY"] = api_key
+    Returns:
+        Path to emotion reference audio file, or None if not found
 
-#     # Initialize the HTTP client with SSL verification disabled
-#     http_client = httpx.Client(verify=False)
+    Audio pool structure:
+        emo/
+        ├── happy/
+        │   ├── happy_0.mp3
+        │   ├── happy_1.mp3
+        │   └── ...
+        ├── sad/
+        │   ├── sad_0.mp3
+        │   └── ...
+        └── ...
+    """
+    if not emotion_value or not emotion_audio_pool_dir:
+        return None
 
-#     # Initialize the AzureOpenAI client with the custom HTTP client
-#     if model_name == 'aide-gpt-4o':
-#         client = AzureOpenAI(
-#             azure_endpoint=endpoint_url,
-#             api_key=api_key,
-#             api_version="2024-05-01-preview",
-#             http_client=http_client,
-#         )
-#         response = client.chat.completions.create(
-#         model=model,
-#         messages=messages,
-#         extra_headers={"X-User-Id": user_id},
-#         max_tokens=4096,
-#         )
-#         return response.choices[0].message.content
+    logging.info(f"  -> Looking for emotion reference audio: emotion={emotion_value}")
 
-#     elif model_name=='llama3.3-70b-instruct':
-#         client = OpenAI(
-#             api_key=api_key,
-#             base_url=f"{endpoint_url}/llm/v3/models",
-#             http_client=http_client,
-#         )
+    # Look for directory matching the emotion value
+    category_dir = Path(emotion_audio_pool_dir) / emotion_value
 
-#         extra_headers = {"x-user-id": user_id} if user_id else {}
-#         response = client.chat.completions.create(
-#                 model=model_name,
-#                 messages=messages,
-#                 extra_headers=extra_headers,
-#                 n=2,
-#             )
-#         return response.choices[0].message.content
+    if not category_dir.exists():
+        logging.warning(f"  -> Emotion reference directory not found: {category_dir}")
+        return None
+
+    # Get all audio files in the category (.mp3 or .wav)
+    audio_files = list(category_dir.glob("*.mp3")) + list(category_dir.glob("*.wav"))
+
+    if not audio_files:
+        logging.warning(f"  -> No audio files found in {category_dir}")
+        return None
+
+    # Randomly select one audio file
+    selected_audio = random.choice(audio_files)
+
+    logging.info(f"  -> Selected emotion reference: {selected_audio.name}")
+    return str(selected_audio)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TTS FUNCTION - IndexTTS2 with emotion reference audio
+# ═══════════════════════════════════════════════════════════════════════════
+
+def IndexTTS_gen(script, output, tts_model, spk_audio_dir="XTTS_reference", emotion_audio_pool_dir="emo"):
+    """
+    Generate TTS audio using IndexTTS2 model with emotion reference audio.
+    Uses IndexTTS-2's disentangled architecture:
+    - Timbre Prompt (spk_audio_prompt): Controls speaker voice identity
+    - Style Prompt (emo_audio_prompt): Controls emotion/tone from reference audio
+
+    Args:
+        script: List of (role, text) tuples where text may contain (emotion:happy) tags
+        output: Path to save the output wav file
+        tts_model: Pre-initialized IndexTTS2 model instance
+        spk_audio_dir: Directory containing speaker reference audio files (with all/ subdir)
+        emotion_audio_pool_dir: Directory containing emotion reference audio pool (emo/)
+    """
+    sample_rate = 24000  # IndexTTS2 default sample rate
+    tts = tts_model
+
+    # Find available speaker audio files
+    all_dir = Path(spk_audio_dir) / "all"
+    spk_audio_files = list(all_dir.glob("*.wav"))
+    if len(spk_audio_files) < 2:
+        raise ValueError(f"Need at least 2 speaker audio files in {all_dir}. Found {len(spk_audio_files)}")
+
+    # Select User speaker (Speaker A) and Agent speaker (Speaker B)
+    spk_A_audio = str(random.choice(spk_audio_files))
+    remaining = [f for f in spk_audio_files if str(f) != spk_A_audio]
+    spk_B_audio = str(random.choice(remaining))
+
+    logging.info(f"Speaker A (User): {Path(spk_A_audio).name}")
+    logging.info(f"Speaker B (Agent): {Path(spk_B_audio).name}")
+
+    # Process each dialogue turn
+    audio_segments = []
+
+    # Track last emotion reference for continuity
+    last_emo_tag = None
+    last_emo_audio = None
+
+    for idx, (role, text) in enumerate(script, 1):
+        # Check if this is a pause marker
+        is_pause = role.strip().lower().startswith("[pause]")
+
+        # Assign speaker based on role (User = spk_A, Agent = spk_B)
+        # Include [pause] markers in speaker assignment
+        is_user = role in ("User", "[overlap] User", "[pause] User") or role.strip().lower().startswith("[pause] user")
+        spk_audio = spk_A_audio if is_user else spk_B_audio
+
+        # Extract emotion tags from text
+        clean_text, para_tags = extract_paralinguistic_tags(text)
+
+        # If text is "[pause]", don't try to extract tags from it
+        if is_pause:
+            clean_text = ""
+            para_tags = None
+            logging.info(f"Turn {idx} ({role}): Detected PAUSE marker - will generate silence")
+
+        # Get emotion value if present
+        emotion_value = None
+        if para_tags and "emotion" in para_tags:
+            emotion_value = para_tags["emotion"]
+            logging.info(f"Turn {idx} ({role}): emotion={emotion_value}")
+
+        # Get emotion reference audio
+        emo_audio_prompt = None
+        if emotion_value and emotion_audio_pool_dir:
+            # Check if same as last emotion (reuse for continuity)
+            if last_emo_tag == emotion_value and last_emo_audio:
+                emo_audio_prompt = last_emo_audio
+                logging.info(f"  -> Reusing emotion reference for {emotion_value}")
+            else:
+                emo_audio_prompt = get_emotion_reference_audio(emotion_value, emotion_audio_pool_dir)
+                if emo_audio_prompt:
+                    last_emo_tag = emotion_value
+                    last_emo_audio = emo_audio_prompt
+
+        # Generate temporary output path for this turn
+        temp_output = f"/tmp/indextts_turn_{idx}.wav"
+
+        # Generate speech with IndexTTS2
+        try:
+            # ═══════════════════════════════════════════════════════════════════════════
+            # PAUSE HANDLING: Generate silence instead of TTS
+            # ═══════════════════════════════════════════════════════════════════════════
+            if is_pause:
+                # Generate silence with longer duration (0.6-1.0 seconds)
+                pause_duration = random.uniform(0.6, 1.0)
+                pause_frames = int(pause_duration * sample_rate)
+                wav = torch.zeros(1, pause_frames)
+                logging.info(f"  -> Generated pause: {pause_duration:.2f}s ({pause_frames} frames)")
+            else:
+                # Normal TTS generation
+                infer_kwargs = {
+                    "spk_audio_prompt": spk_audio,  # Timbre prompt (speaker identity)
+                    "text": clean_text,
+                    "output_path": temp_output,
+                    "use_random": False,
+                    "verbose": False
+                }
+
+                # Add emotion reference audio if available
+                if emo_audio_prompt is not None:
+                    infer_kwargs["emo_audio_prompt"] = emo_audio_prompt
+                    logging.info(f"  -> Using emotion reference: {Path(emo_audio_prompt).name}")
+
+                tts.infer(**infer_kwargs)
+
+                # Load generated audio
+                wav, sr = torchaudio.load(temp_output)
+
+                # Resample if necessary
+                if sr != sample_rate:
+                    wav = torchaudio.functional.resample(wav, sr, sample_rate)
+
+                # Ensure mono
+                if wav.shape[0] > 1:
+                    wav = wav[0:1, :]
+
+            # Store with role information for stereo placement
+            audio_segments.append((role, wav))
+
+            # Clean up temp file
+            if os.path.exists(temp_output):
+                os.remove(temp_output)
+
+        except Exception as e:
+            logging.error(f"Error generating audio for turn {idx}: {e}")
+            # Create silence as fallback
+            silence = torch.zeros(1, sample_rate)
+            audio_segments.append((role, silence))
+
+    # Combine audio segments into stereo (User=left, Agent=right)
+    l_ch = None
+    r_ch = None
+
+    for idx, (role, wav) in enumerate(audio_segments):
+        is_user = role in ("User", "[overlap] User", "[pause] User") or role.strip().lower().startswith("[pause] user")
+        is_overlap = role.strip().lower().startswith("[overlap]")
+        is_pause = role.strip().lower().startswith("[pause]")
+
+        if idx == 0:
+            # First utterance
+            if is_user:
+                l_ch = wav
+                r_ch = torch.zeros_like(wav)
+            else:
+                r_ch = wav
+                l_ch = torch.zeros_like(wav)
+        else:
+            if is_overlap:
+                # Handle overlap
+                overlap_frame = int(random.uniform(0.6, 1.0) * sample_rate)
+                padded = torch.zeros(1, wav.shape[-1] - overlap_frame)
+                pause = torch.zeros(1, sample_rate // 4)
+
+                if is_user:
+                    l_ch = l_ch[:, :-overlap_frame]
+                    l_ch = torch.cat([l_ch, pause, wav], -1)
+                    r_ch = torch.cat([r_ch, pause, padded], -1)
+                else:
+                    r_ch = r_ch[:, :-overlap_frame]
+                    r_ch = torch.cat([r_ch, pause, wav], -1)
+                    l_ch = torch.cat([l_ch, pause, padded], -1)
+            else:
+                # Normal concatenation with pause
+                padded = torch.zeros_like(wav)
+                pause = torch.zeros(1, sample_rate // 4)
+
+                if is_user:
+                    l_ch = torch.cat([l_ch, pause, wav], -1)
+                    r_ch = torch.cat([r_ch, pause, padded], -1)
+                else:
+                    r_ch = torch.cat([r_ch, pause, wav], -1)
+                    l_ch = torch.cat([l_ch, pause, padded], -1)
+
+    # Combine stereo channels
+    full_dialog = torch.cat([l_ch, r_ch], dim=0)
+
+    # Save audio file
+    torchaudio.save(str(output), full_dialog, sample_rate)
+    logging.info(f"Saved TTS audio to: {output}")
+
 
 def chat_completion(model_name: str, messages: List[Dict], **gen_kwargs) -> str:
     """
@@ -404,7 +405,7 @@ def generate_scenarios(cfg):
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     # 將 {n} 套入 prompt
-    system_prompt = cfg.scenario["prompt"].format(n=cfg.scenario["n"])
+    system_prompt = cfg.scenario["prompt"].format(n=cfg.scenario["n"], topic=cfg.scenario["topic"])
     msgs = [{"role": "system", "content": system_prompt}]
 
     text = chat_completion(
@@ -684,112 +685,85 @@ def llm_judge(cfg):
 # ────────────────────────────────  TTS  ────────────────────────────────────
 
 def tts_batch(cfg):
-    mode = cfg.tts.mode
+    """
+    Batch process dialogue text files to generate TTS audio using IndexTTS2.
+    Uses speaker reference audio + emotion reference audio from the emotion pool.
+    """
     src = Path(cfg.tts.load_dir)
     wav_dir = Path(cfg.tts.wav_dir); wav_dir.mkdir(parents=True, exist_ok=True)
+
+    # IndexTTS2 configuration from config
+    model_dir = cfg.tts.get("model_dir", "index-tts/checkpoints")
+    spk_audio_dir = cfg.tts.get("spk_audio_dir", "XTTS_reference")
+    emotion_audio_pool_dir = cfg.tts.get("emotion_audio_pool_dir", "emo")
 
     # Create error log file
     error_log_path = wav_dir / "tts_errors.txt"
 
-    # Process folder by folder (data1, data2, etc.)
-    for data_folder in sorted([f for f in src.iterdir() if f.is_dir()]):
-        # Look for dialogue_multi_txt subfolder
-        if True: #data_folder.name in ["data12-2"]:
-        #     continue
-        # else:
-            txt_folder = data_folder / "dialogue_multi_txt"
-            if not txt_folder.exists():
-                print(f"Warning: {data_folder.name}/dialogue_multi_txt not found, skipping...")
-                continue
+    # ═══════════════════════════════════════════════════════════════════════════
+    # INITIALIZE IndexTTS2 MODEL ONCE (REUSE FOR ALL FILES)
+    # ═══════════════════════════════════════════════════════════════════════════
+    logging.info("Initializing IndexTTS2 model...")
+    cfg_path = os.path.join(model_dir, "config.yaml")
 
-            # Create corresponding output folder structure
-            folder_wav_dir = wav_dir / data_folder.name / "dialogue_multi_txt"
-            folder_wav_dir.mkdir(parents=True, exist_ok=True)
+    logging.info(f"PyTorch version: {torch.__version__}")
+    logging.info(f"CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        logging.info(f"GPU name: {torch.cuda.get_device_name(0)}")
 
-            for txt_file in tqdm(list(txt_folder.glob("*.txt")), desc=f"tts-{data_folder.name}"):
-                if cfg.tts.model == "CosyVoice":
-                    post_fix = cfg.tts["postfix"]
-                    wav_file_path = folder_wav_dir / f"{txt_file.stem}.wav"
-                elif cfg.tts.model == "XTTS":
-                    wav_file_path = folder_wav_dir / f"{txt_file.stem}_XTTS.wav"
-                else:
-                    wav_file_path = folder_wav_dir / f"{txt_file.stem}.wav"
+    if not torch.cuda.is_available():
+        logging.error("CUDA is NOT available! TTS will run on CPU (VERY SLOW)")
+        raise RuntimeError("CUDA is required but not available.")
 
-                if wav_file_path.exists():
-                    print(f"Skipping {data_folder.name}/dialogue_multi_txt/{txt_file.name} - wav file already exists")
+    tts_model = IndexTTS2(
+        cfg_path=cfg_path,
+        model_dir=model_dir,
+        device="cuda",
+        use_fp16=True,
+        use_cuda_kernel=True,
+        use_accel=False,
+        use_torch_compile=False,
+        use_deepspeed=False
+    )
+    logging.info("IndexTTS2 model initialized successfully!")
+
+    # Load txt files directly from src (flat structure)
+    txt_folder = src
+    folder_wav_dir = wav_dir
+    folder_wav_dir.mkdir(parents=True, exist_ok=True)
+
+    for txt_file in tqdm(list(txt_folder.glob("*.txt")), desc="tts"):
+        wav_file_path = folder_wav_dir / f"{txt_file.stem}_IndexTTS.wav"
+
+        if wav_file_path.exists():
+            print(f"Skipping {txt_file.name} - wav file already exists")
+            continue
+        try:
+            text = txt_file.read_text("utf-8")
+            script = []
+            for idx, line in enumerate(text.strip().splitlines()):
+                line = line.strip()
+                if not line:
                     continue
-                try:
-                    text = txt_file.read_text("utf-8")
-                    script = []
-                    for idx, line in enumerate(text.strip().splitlines()):
-                        line = line.strip()
-                        if not line:
-                            continue
-                        if ":" in line:
-                            role, content = line.split(":", 1)
-                            script.append((role.strip(), content.strip()))
-                    print(script)
-                    if cfg.tts.model == "CosyVoice":
-                        post_fix = cfg.tts["postfix"]
-                        CosyVoice_gen(mode, script, folder_wav_dir / f"{txt_file.stem}.wav")
-                    if cfg.tts.model == "XTTS":
-                        XTTS_gen(script, folder_wav_dir / f"{txt_file.stem}_XTTS.wav")
-                except Exception as e:
-                    # Log the error and continue with next file
-                    print(f"Error processing {data_folder.name}/dialogue_multi_txt/{txt_file.name}: {str(e)}")
-                    with open(error_log_path, "a", encoding="utf-8") as error_file:
-                        error_file.write(f"{data_folder.name}/dialogue_multi_txt/{txt_file.name}: {str(e)}\n")
-                    continue
+                if ":" in line:
+                    role, content = line.split(":", 1)
+                    script.append((role.strip(), content.strip()))
 
-## ──────────────────────────  Control  ───────────────────────────────
+            logging.info(f"Generating TTS for {txt_file.name}...")
+            IndexTTS_gen(
+                script,
+                wav_file_path,
+                tts_model=tts_model,
+                spk_audio_dir=spk_audio_dir,
+                emotion_audio_pool_dir=emotion_audio_pool_dir
+            )
+        except Exception as e:
+            # Log the error and continue with next file
+            print(f"Error processing {txt_file.name}: {str(e)}")
+            with open(error_log_path, "a", encoding="utf-8") as error_file:
+                error_file.write(f"{txt_file.name}: {str(e)}\n")
+            continue
 
-def control_dialogues(cfg):
-    out_path = Path(cfg.control["out_dir"])
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.mkdir(parents=True, exist_ok=True)
-
-
-    # 將 {n} 套入 prompt
-    user_prompt = cfg.control["prompt"]
-
-
-    for s in tqdm(range(cfg.control["n"]), desc="dialogues"):
-
-        messages = [
-            {"role": "system", "content": "you are a good instructions following model."},
-            {"role": "user",   "content": user_prompt}
-        ]
-        script = chat_completion(cfg.control["model"], messages,
-                                max_tokens=1024,
-                                temperature=0.9, top_p=0.9)
-        print(script)
-        path = out_path / f"control_{s}.txt"
-        path.write_text(script, encoding="utf‑8")
-
-## ──────────────────────────  Human ───────────────────────────────
-
-def laughter_breath_dialogues(cfg):
-    out_path = Path(cfg.human["out_dir"])
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.mkdir(parents=True, exist_ok=True)
-
-
-    # 將 {n} 套入 prompt
-    user_prompt = cfg.human["prompt"]
-
-
-    for s in tqdm(range(cfg.human["n"]), desc="dialogues"):
-
-        messages = [
-            {"role": "system", "content": "you are a good instructions following model."},
-            {"role": "user",   "content": user_prompt}
-        ]
-        script = chat_completion(cfg.human["model"], messages,
-                                max_tokens=1024,
-                                temperature=0.9, top_p=0.9)
-        print(script)
-        path = out_path / f"human_{s}.txt"
-        path.write_text(script, encoding="utf‑8")
 
 # ─────────────────────────────  ORCHESTRATOR  ──────────────────────────────
 
@@ -800,6 +774,9 @@ class PipelineConfig:
     # stages to run
     stages: List[str] = field(default_factory=lambda: [
         "scenario", "dialogue", "overlap", "tts"])
+
+    # emotion pool
+    emotion: List[str] = field(default_factory=lambda: [])
 
     # scenario
     scenario: OmegaConf = OmegaConf.create({
@@ -837,11 +814,14 @@ class PipelineConfig:
         "out_dir": "data/filler_txt",
     })
 
-    # tts
+    # tts (IndexTTS2 with emotion reference)
     tts: OmegaConf = OmegaConf.create({
-        "model": "CosyVoice2-0.5B",
-        "spk_bank": "resources/speakers.json",
+        "model": "IndexTTS2",
+        "model_dir": "index-tts/checkpoints",
+        "spk_audio_dir": "XTTS_reference",
+        "emotion_audio_pool_dir": "emo",
         "wav_dir": "data/wav",
+        "load_dir": "data",  # Directory containing data folders with dialogue_multi_txt
     })
 
     control: OmegaConf = OmegaConf.create({
@@ -881,12 +861,6 @@ class Pipeline:
         if "judge" in st:
             print("Judge dialogue...")
             llm_judge(self.cfg)
-        # if "control" in st:
-        #     print("Generate control dialogue...")
-        #     control_dialogues(self.cfg)
-        # if "human" in st:
-            # print("Generate humanity dialogue...")
-            # insert_overlap(self.cfg)
         if "tts" in st:
             print("Speech dialogue Generating...")
             tts_batch(self.cfg)

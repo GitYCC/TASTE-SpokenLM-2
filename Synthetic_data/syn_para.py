@@ -5,6 +5,7 @@ import re
 import os
 import random
 import logging
+import copy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
@@ -66,23 +67,177 @@ def convert_nested_json_to_jsonl(input_path, output_path):
 
 # ──────────────────────────────  PARALINGUISTIC UTILS  ────────────────────────────────
 
-def generate_single_paralinguistic_tag(pools: Dict[str, List[str]], dimension: str = None) -> Dict[str, str]:
+def generate_paralinguistic_tag(
+    pools: Dict[str, List[str]],
+    mode: str = "single",
+    multi_para_config: Dict = None,
+    control_config: Dict = None,
+    last_tags: Dict[str, str] = None
+) -> Dict[str, str]:
     """
-    Select ONLY ONE paralinguistic dimension and value (not all dimensions).
+    Unified function for generating paralinguistic tags with different modes.
+
+    Merges the logic of generate_single_paralinguistic_tag, generate_multi_paralinguistic_tags,
+    and select_control_target into one flexible function.
 
     Args:
         pools: Dictionary of paralinguistic dimension pools from config
-        dimension: Optional specific dimension to use. If None, randomly select one.
+        mode: Generation strategy - "single", "multi", or "control"
+            - "single": Randomly pick one dimension and one value
+            - "multi": Pick multiple dimensions with probabilistic cascading (for multi-para control)
+            - "control": Pick fixed dimension, excluding current value (for single-para control)
+        multi_para_config: Required for mode="multi". Dict with:
+            - allowed_dimensions: List[str] - dimensions that can be combined
+            - add_probability: float (default 0.5) - probability of adding subsequent tags
+            - max_tags: int (default 3) - maximum number of tags to generate
+        control_config: Required for mode="control". Dict with:
+            - fixed_dimension: str - the specific dimension to use
+            - current_value: Optional[str] - current value to exclude from selection
+        last_tags: Optional dict of last used tags {dimension: value} to exclude from selection
+                   Used in multi mode to ensure new tags are different from current ones
 
-    Returns: Dictionary with SINGLE dimension and value
-             e.g., {"speed": "fast"} or {"emotion": "happy"}
+    Returns:
+        Dictionary with paralinguistic tag(s)
+        e.g., {"speed": "fast"} for single/control, or {"speed": "fast", "pitch": "high"} for multi
     """
-    if dimension is None:
-        # Randomly pick ONE dimension
+    if mode == "single":
+        # ─────────────────────────────────────────────────────────────
+        # SINGLE MODE: Randomly pick one dimension and value
+        # ─────────────────────────────────────────────────────────────
         dimension = random.choice(list(pools.keys()))
+        value = random.choice(pools[dimension])
+        return {dimension: value}
 
-    value = random.choice(pools[dimension])
-    return {dimension: value}
+    elif mode == "multi":
+        # ─────────────────────────────────────────────────────────────
+        # MULTI MODE: Pick multiple dimensions with probabilistic cascading
+        # Used for multi-para control requests
+        # Excludes current values from last_tags to ensure change
+        # ─────────────────────────────────────────────────────────────
+        if not multi_para_config:
+            raise ValueError("multi_para_config required for mode='multi'")
+
+        allowed_dimensions = multi_para_config.get("allowed_dimensions", [])
+        add_probability = multi_para_config.get("add_probability", 0.5)
+        max_tags = multi_para_config.get("max_tags", 3)
+
+        # Filter pools to only allowed dimensions
+        available_dims = [d for d in allowed_dimensions if d in pools]
+
+        if not available_dims:
+            logging.warning("No available dimensions for multi-para mode")
+            return {}
+
+        # Shuffle to randomize order
+        random.shuffle(available_dims)
+
+        # Helper function to select value excluding current
+        def select_value_excluding_current(dim):
+            available_values = list(pools[dim])
+            # Exclude current value if exists in last_tags
+            if last_tags and dim in last_tags:
+                current_val = last_tags[dim]
+                available_values = [v for v in available_values if v != current_val]
+                if available_values:
+                    logging.info(f"    [MULTI-PARA] Excluding current '{current_val}' for {dim}")
+                else:
+                    # All values filtered out, use full pool
+                    available_values = list(pools[dim])
+                    logging.warning(f"    [MULTI-PARA] All values filtered for {dim}, using full pool")
+            return random.choice(available_values)
+
+        # Start with one mandatory tag
+        result = {}
+        first_dim = available_dims[0]
+        result[first_dim] = select_value_excluding_current(first_dim)
+        remaining_dims = available_dims[1:]
+
+        # Probabilistically add more tags
+        for dim in remaining_dims:
+            if len(result) >= max_tags:
+                break
+            if random.random() < add_probability:
+                result[dim] = select_value_excluding_current(dim)
+            else:
+                # Once we fail the probability check, stop adding more
+                break
+
+        logging.info(f"    [MULTI-PARA] Generated {len(result)} tags: {result}")
+        return result
+
+    elif mode == "control":
+        # ─────────────────────────────────────────────────────────────
+        # CONTROL MODE: Pick fixed dimension, excluding current value
+        # Used for single-para control requests (select_control_target logic)
+        # ─────────────────────────────────────────────────────────────
+        if not control_config:
+            raise ValueError("control_config required for mode='control'")
+
+        fixed_dimension = control_config.get("fixed_dimension")
+        current_value = control_config.get("current_value", None)
+
+        if not fixed_dimension:
+            raise ValueError("fixed_dimension required in control_config")
+
+        dimension = fixed_dimension
+        available_values = list(pools[dimension])  # Make a copy
+
+        # Exclude current value if provided (can't request what you already have)
+        if current_value and current_value in available_values:
+            available_values = [v for v in available_values if v != current_value]
+            logging.info(f"    [SELECT_CONTROL] Excluding current value '{current_value}' from selection")
+
+        # If we filtered out all values, fall back to original pool (edge case)
+        if not available_values:
+            logging.warning(f"    [SELECT_CONTROL] All values filtered out, using full pool")
+            available_values = list(pools[dimension])
+
+        target_value = random.choice(available_values)
+        return {dimension: target_value}
+
+    else:
+        raise ValueError(f"Unknown mode: {mode}. Must be 'single', 'multi', or 'control'")
+
+
+def format_multi_paralinguistic_tags(tags: Dict[str, str]) -> str:
+    """
+    Format multiple paralinguistic tags into parentheses format.
+    Format: (speed:fast, pitch:high, emotion:happy)
+
+    Args:
+        tags: Dictionary of dimension:value pairs
+
+    Returns: Formatted string like "(speed:fast, pitch:high)"
+    """
+    if not tags:
+        return ""
+    tag_str = ", ".join([f"{k}:{v}" for k, v in tags.items()])
+    return f"({tag_str})"
+
+
+def count_paralinguistic_tags(text: str) -> int:
+    """
+    Count the number of paralinguistic tags in a text string.
+
+    Args:
+        text: Text that may start with (tag1:val1, tag2:val2, ...)
+
+    Returns: Number of tags found (0 if no tags)
+    """
+    if not text.startswith("("):
+        return 0
+
+    closing = text.find(")")
+    if closing == -1:
+        return 0
+
+    tag_string = text[1:closing].strip()
+    if not tag_string:
+        return 0
+
+    # Count comma-separated pairs
+    pairs = [p.strip() for p in tag_string.split(',') if ':' in p]
+    return len(pairs)
 
 def format_paralinguistic_tags(tags: Dict[str, str]) -> str:
     """
@@ -157,7 +312,7 @@ def generate_scenarios(cfg):
     out_path = Path(cfg.scenario["out_file"])
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    system_prompt = cfg.scenario["prompt"].format(n=cfg.scenario["n"])
+    system_prompt = cfg.scenario["prompt"].format(n=cfg.scenario["n"], topic=cfg.scenario["topic"])
     msgs = [{"role": "system", "content": system_prompt}]
 
     text = chat_completion(
@@ -180,52 +335,409 @@ def generate_scenarios(cfg):
 
 # ─────────────────────────────  CONTROL MODE UTILS  ──────────────────────────────
 
-def select_control_target(pools: Dict[str, List[str]], fixed_dimension: str, current_value: str = None) -> Tuple[str, str]:
-    """
-    Select a paralinguistic target value for the specified dimension.
-    EXCLUDES the current value to ensure meaningful control requests.
-
-    Args:
-        pools: Paralinguistic dimension pools from config
-        fixed_dimension: The specific dimension to use (from config)
-        current_value: Current value of this dimension (will be excluded from selection)
-
-    Returns: (dimension, target_value)
-             e.g., ("speed", "fast") or ("emotion", "happy")
-    """
-    # Use the fixed dimension from config
-    dimension = fixed_dimension
-    available_values = pools[dimension]
-
-    # Exclude current value if provided (can't request what you already have)
-    if current_value and current_value in available_values:
-        available_values = [v for v in available_values if v != current_value]
-        logging.info(f"    [SELECT_CONTROL] Excluding current value '{current_value}' from selection")
-
-    # If we filtered out all values, fall back to original pool (edge case)
-    if not available_values:
-        logging.warning(f"    [SELECT_CONTROL] All values filtered out, using full pool")
-        available_values = pools[dimension]
-
-    target_value = random.choice(available_values)
-    return dimension, target_value
 
 # ─────────────────────────────  PARALINGUISTIC DIALOGUE GEN  ──────────────────────────────
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HELPER FUNCTIONS FOR DIALOGUE GENERATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _determine_control_mode(
+    turn_pair_idx: int,
+    has_had_control_request: bool,
+    control_request_frequency_first: float,
+    control_request_frequency_subsequent: float
+) -> bool:
+    """
+    Determine if this turn pair should be in control mode.
+
+    Args:
+        turn_pair_idx: Index of the current turn pair (0-based)
+        has_had_control_request: Whether dialogue has had any control request yet
+        control_request_frequency_first: Probability for first control request
+        control_request_frequency_subsequent: Probability for subsequent requests
+
+    Returns:
+        True if this should be a control mode turn pair
+    """
+    # Use two-tier probability system
+    if has_had_control_request:
+        # Already had control - use lower probability
+        return random.random() < control_request_frequency_subsequent
+    else:
+        # First control request - use higher probability
+        return random.random() < control_request_frequency_first
+
+
+def _generate_control_para_tags(
+    multi_para_mode: bool,
+    multi_para_config: Dict,
+    control_dimension: str,
+    last_para_tag: Optional[Dict[str, str]],
+    paralinguistic_pools: Dict[str, List[str]]
+) -> Dict[str, str]:
+    """
+    Generate paralinguistic tags for control mode.
+
+    Args:
+        multi_para_mode: Whether to use multi-para mode
+        multi_para_config: Configuration for multi-para mode
+        control_dimension: Fixed dimension for single-para mode
+        last_para_tag: Last emotion tags used by agent (full dict)
+        paralinguistic_pools: Available paralinguistic options
+
+    Returns:
+        Dictionary of para tags {dimension: value}
+    """
+    if multi_para_mode:
+        # Multi-para mode: generate multiple tags, excluding current values
+        return generate_paralinguistic_tag(
+            pools=paralinguistic_pools,
+            mode="multi",
+            multi_para_config=multi_para_config,
+            last_tags=last_para_tag  # Exclude current values to ensure change
+        )
+    else:
+        # Single-para mode: generate one tag, excluding current value
+        current_value_to_exclude = None
+        if last_para_tag and control_dimension in last_para_tag:
+            # Extract the current value for this dimension from the dict
+            current_value_to_exclude = last_para_tag[control_dimension]
+
+        return generate_paralinguistic_tag(
+            pools=paralinguistic_pools,
+            mode="control",
+            control_config={
+                "fixed_dimension": control_dimension,
+                "current_value": current_value_to_exclude
+            }
+        )
+
+
+def _build_user_instruction(
+    is_first_turn: bool,
+    is_control_mode: bool,
+    control_para_tags: Optional[Dict[str, str]],
+    context_info: str,
+    conversation_history: List[str],
+    multi_para_mode: bool,
+    last_para_tag: Optional[Dict[str, str]] = None
+) -> str:
+    """
+    Build instruction prompt for user LLM.
+
+    Args:
+        is_first_turn: Whether this is the first turn (turn 0)
+        is_control_mode: Whether this is a control mode turn
+        control_para_tags: Para tags to request (if control mode)
+        context_info: Scenario context
+        conversation_history: Previous conversation turns
+        multi_para_mode: Whether multi-para mode is enabled
+        last_para_tag: The agent's CURRENT para tags (so LLM knows what to change FROM)
+
+    Returns:
+        Instruction string for user LLM
+    """
+    # First turn WITHOUT control mode - start normal conversation
+    if is_first_turn and not is_control_mode:
+        return (
+            f"{context_info}"
+            f"This is the start of the conversation. "
+            f"Generate the user's first message based on the scenario. "
+            f"Be natural and conversational. Only output the user's utterance, nothing else."
+        )
+
+    history_text = "\n".join(conversation_history) if conversation_history else ""
+
+    # First turn WITH control mode - start with voice control request
+    # IMPORTANT: First turn cannot use "switch" or "change" language since there's no previous voice state
+    if is_first_turn and is_control_mode and control_para_tags:
+        if multi_para_mode and len(control_para_tags) > 1:
+            # Multi-para: request multiple characteristics as opening
+            tag_requests = ", ".join([f"{k}={v}" for k, v in control_para_tags.items()])
+            tag_list = "\n".join([f"- {k}: {v}" for k, v in control_para_tags.items()])
+            return (
+                f"{context_info}"
+                f"This is the start of the conversation. "
+                f"Generate the user's FIRST message where they immediately ask the agent to speak in a specific way.\n"
+                f"Ask them to use MULTIPLE voice characteristics:\n{tag_list}\n\n"
+                f"Be creative and natural - combine these requests naturally as an opening.\n"
+                f"IMPORTANT: Do NOT use words like 'switch' or 'change' since this is the first interaction.\n"
+                f"Instead, simply ask them to 'speak with' or 'use' these characteristics.\n"
+                f"Generate a DIVERSE, NATURAL opening request for: {tag_requests}\n"
+                f"Then state your question/need based on the scenario.\n"
+                f"Only output the user's utterance, nothing else."
+            )
+        else:
+            # Single-para: request one characteristic as opening
+            ctrl_dim, ctrl_value = next(iter(control_para_tags.items()))
+            return (
+                f"{context_info}"
+                f"This is the start of the conversation. "
+                f"Generate the user's FIRST message where they immediately ask the agent to speak in a specific way.\n"
+                f"Specifically, ask them to speak with {ctrl_dim} as '{ctrl_value}'.\n"
+                f"Be creative and natural - use your own words, don't use a template.\n"
+                f"IMPORTANT: Do NOT use words like 'switch' or 'change' since this is the first interaction.\n"
+                f"Instead, simply ask them to 'speak with' or 'use' {ctrl_dim}='{ctrl_value}'.\n"
+                f"Generate a DIVERSE, NATURAL opening request for {ctrl_dim}='{ctrl_value}'.\n"
+                f"Then state your question/need based on the scenario.\n"
+                f"Only output the user's utterance, nothing else."
+            )
+
+    if is_control_mode and control_para_tags:
+        # Control mode: user requests voice change
+        if multi_para_mode and len(control_para_tags) > 1:
+            # Multi-para: request multiple changes
+            tag_requests = ", ".join([f"{k}={v}" for k, v in control_para_tags.items()])
+            tag_list = "\n".join([f"- {k}: {v}" for k, v in control_para_tags.items()])
+
+            # Build current state info for LLM context
+            current_state_info = ""
+            if last_para_tag:
+                current_tags_str = ", ".join([f"{k}='{v}'" for k, v in last_para_tag.items()])
+                current_state_info = f"The agent is currently speaking with: {current_tags_str}\n"
+
+            return (
+                f"{context_info}"
+                f"Conversation so far:\n{history_text}\n\n"
+                f"Generate the user's next response where they ask the agent to change their voice.\n"
+                f"{current_state_info}"
+                f"Ask them to adjust MULTIPLE voice characteristics at once:\n{tag_list}\n\n"
+                f"Be creative and natural - combine these requests naturally.\n"
+                f"Generate a DIVERSE, NATURAL request for: {tag_requests}\n"
+                f"Then optionally continue with the conversation topic.\n"
+                f"Only output the user's utterance, nothing else."
+            )
+        else:
+            # Single-para: request one change
+            ctrl_dim, ctrl_value = next(iter(control_para_tags.items()))
+
+            # Build current state info so LLM knows what to change FROM
+            current_state_info = ""
+            if last_para_tag and ctrl_dim in last_para_tag:
+                current_val = last_para_tag[ctrl_dim]
+                current_state_info = f"The agent is currently speaking with {ctrl_dim}='{current_val}'.\n"
+
+            return (
+                f"{context_info}"
+                f"Conversation so far:\n{history_text}\n\n"
+                f"Generate the user's next response where they ask the agent to change their voice.\n"
+                f"{current_state_info}"
+                f"Specifically, ask them to change their {ctrl_dim} to '{ctrl_value}'.\n"
+                f"Be creative and natural - use your own words, don't use a template.\n"
+                f"Generate a DIVERSE, NATURAL request for {ctrl_dim}='{ctrl_value}'.\n"
+                f"Then optionally continue with the conversation topic.\n"
+                f"Only output the user's utterance, nothing else."
+            )
+    else:
+        # Normal mode: regular conversation
+        return (
+            f"{context_info}"
+            f"Conversation so far:\n{history_text}\n\n"
+            f"Generate the user's next response based on the agent's last message. "
+            f"Be natural and conversational. Only output the user's utterance, nothing else."
+        )
+
+
+def _build_agent_instruction_and_tags(
+    is_control_mode: bool,
+    control_para_tags: Optional[Dict[str, str]],
+    last_para_tag: Optional[Dict[str, str]],
+    context_info: str,
+    conversation_history: List[str],
+    multi_para_mode: bool,
+    paralinguistic_pools: Dict[str, List[str]]
+) -> Tuple[str, Optional[Dict[str, str]], bool]:
+    """
+    Build instruction prompt for agent LLM and determine para tags to apply.
+
+    Args:
+        is_control_mode: Whether this is a control mode turn
+        control_para_tags: Para tags requested by user
+        last_para_tag: Last emotion tags used by agent (full dict)
+        context_info: Scenario context
+        conversation_history: Previous conversation turns
+        multi_para_mode: Whether multi-para mode is enabled
+        paralinguistic_pools: Available paralinguistic options
+
+    Returns:
+        Tuple of (instruction, para_tags_to_apply, use_control_prompt)
+    """
+    history_text = "\n".join(conversation_history)
+
+    if is_control_mode and control_para_tags:
+        # Control mode: apply requested para tags
+        para_tags = control_para_tags
+
+        if multi_para_mode and len(control_para_tags) > 1:
+            # Multi-para control
+            para_tag_str = format_multi_paralinguistic_tags(para_tags)
+            tag_list = ", ".join([f"{k} to '{v}'" for k, v in para_tags.items()])
+
+            para_instruction = (
+                f"\n\nIMPORTANT: The user just asked you to change MULTIPLE voice characteristics:\n"
+                f"{tag_list}\n\n"
+                f"You should:\n"
+                f"1. Acknowledge the requests naturally \n"
+                f"2. Then continue helping with their question/topic\n\n"
+                f"Your response MUST start with ALL the tags in parentheses EXACTLY as shown:\n"
+                f"{para_tag_str}\n\n"
+                f"Format: {para_tag_str} [brief acknowledgment] [continue conversation]\n"
+            )
+        else:
+            # Single-para control
+            ctrl_dim, ctrl_value = next(iter(control_para_tags.items()))
+            para_tag_str = format_paralinguistic_tags(para_tags)
+
+            para_instruction = (
+                f"\n\nIMPORTANT: The user just asked you to change your {ctrl_dim} to '{ctrl_value}'.\n"
+                f"You should:\n"
+                f"1. Acknowledge the request naturally\n"
+                f"2. Then continue helping with their question/topic\n\n"
+                f"Your response MUST start with the tag in parentheses EXACTLY as shown:\n"
+                f"{para_tag_str}\n\n"
+                f"Format: {para_tag_str} [brief acknowledgment] [continue conversation]\n"
+            )
+
+        agent_instruction = (
+            f"{context_info}"
+            f"Conversation so far:\n{history_text}\n\n"
+            f"Generate the agent's response to the user's last message. "
+            f"Be helpful, professional, and natural. "
+            f"{para_instruction}"
+            f"Only output the agent's utterance (with the paralinguistic tag if specified), nothing else."
+        )
+
+        return agent_instruction, para_tags, True  # Use control prompt
+
+    elif last_para_tag:
+        # Normal mode with emotion continuity - maintain ALL previous tags
+        para_tags = last_para_tag.copy()
+
+        # Format tags for display
+        if len(para_tags) > 1:
+            para_tag_str = format_multi_paralinguistic_tags(para_tags)
+            tag_list = ", ".join([f"{k}='{v}'" for k, v in para_tags.items()])
+            para_instruction = (
+                f"\n\nIMPORTANT: For emotional continuity, maintain ALL the same voice characteristics as your last response:\n"
+                f"{tag_list}\n\n"
+                f"Your response MUST start with ALL tags in parentheses EXACTLY as shown:\n"
+                f"{para_tag_str}\n\n"
+                f"Format: {para_tag_str} [your response]\n"
+                f"This ensures your voice characteristics remain consistent throughout the conversation.\n"
+            )
+        else:
+            para_tag_str = format_paralinguistic_tags(para_tags)
+            ctrl_dim, ctrl_value = next(iter(para_tags.items()))
+            para_instruction = (
+                f"\n\nIMPORTANT: For emotional continuity, maintain the same {ctrl_dim} as your last response ('{ctrl_value}').\n"
+                f"Your response MUST start with the tag in parentheses EXACTLY as shown:\n"
+                f"{para_tag_str}\n\n"
+                f"Format: {para_tag_str} [your response]\n"
+                f"This ensures your voice characteristics remain consistent throughout the conversation.\n"
+            )
+
+        agent_instruction = (
+            f"{context_info}"
+            f"Conversation so far:\n{history_text}\n\n"
+            f"Generate the agent's response to the user's last message. "
+            f"Be helpful, professional, and natural. "
+            f"{para_instruction}"
+            f"Only output the agent's utterance (with the paralinguistic tag(s) if specified), nothing else."
+        )
+
+        return agent_instruction, para_tags, True  # Use control prompt
+
+    else:
+        # Normal mode without emotion history - NO paralinguistic tags
+        # Agent only gets para tags when user explicitly requests them via control mode
+        logging.info(f"    [NORMAL] No emotion history - agent will speak WITHOUT paralinguistic tags")
+
+        para_tags = None
+
+        agent_instruction = (
+            f"{context_info}"
+            f"Conversation so far:\n{history_text}\n\n"
+            f"Generate the agent's response to the user's last message. "
+            f"Be helpful, professional, and natural. "
+            f"Only output the agent's utterance, nothing else."
+        )
+
+        return agent_instruction, para_tags, False  # Use normal prompt (no para tags)
+
+
+def _call_llm_with_retry(
+    model: str,
+    system_prompt: str,
+    user_instruction: str,
+    role_prefix: str,
+    turn_idx: int,
+    max_retries: int = 3
+) -> Optional[str]:
+    """
+    Call LLM with retry logic.
+
+    Args:
+        model: Model name
+        system_prompt: System prompt for LLM
+        user_instruction: User instruction for LLM
+        role_prefix: Prefix to strip from response (e.g., "User:", "Agent:")
+        turn_idx: Turn index for logging
+        max_retries: Maximum number of retries
+
+    Returns:
+        Generated utterance, or None if all retries failed
+    """
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_instruction}
+    ]
+
+    for retry in range(max_retries):
+        try:
+            utterance = chat_completion(
+                model,
+                messages,
+                max_tokens=512,
+                temperature=0.9,
+                top_p=0.9
+            ).strip()
+
+            # Clean up role prefix
+            utterance = re.sub(f'^{role_prefix}\\s*', '', utterance, flags=re.IGNORECASE)
+
+            if utterance:
+                return utterance
+            else:
+                logging.warning(f"Empty response from LLM at turn {turn_idx}, retry {retry + 1}/{max_retries}")
+
+        except Exception as e:
+            logging.error(f"Error in LLM turn {turn_idx} (retry {retry + 1}/{max_retries}): {e}")
+            if retry < max_retries - 1:
+                wait_time = 2 ** retry
+                logging.info(f"Waiting {wait_time}s before retry...")
+                time.sleep(wait_time)
+            else:
+                logging.error(f"Failed after {max_retries} retries")
+
+    return None
+
 
 def generate_paralinguistic_dialogues(cfg):
     """
     PARALINGUISTIC VERSION: Generates dialogues with paralinguistic control tags.
 
-    MODES (randomly switch within each dialogue):
-    - USUAL MODE: Normal conversation with automatic paralinguistic tags
-    - CONTROL MODE: User explicitly requests voice characteristic changes
+    REFACTORED TO PROCESS TURN PAIRS (user+agent) TOGETHER.
+
+    MODES:
+    - CONTROL MODE: User requests voice change, agent applies it (multi-para or single para)
+    - NORMAL MODE: User speaks normally, agent maintains emotion continuity if exists
 
     Key features:
-    1. Randomly generates paralinguistic attributes for agent utterances
-    2. Includes tags in the LLM prompt to guide generation
-    3. Agent responses include paralinguistic tags in parentheses format: (tags)
-    4. Saves dialogue as simple .txt file (TTS extracts tags later)
-    5. Random switching: Each user turn has control_request_frequency chance to make control request
+    1. Processes user+agent turn pairs together to reduce nesting
+    2. Control mode can start from turn 0 (no restriction)
+    3. Cleaner separation of control vs normal mode logic
+    4. Helper functions extract complex logic
     """
     # Read scenarios
     scen_path = Path(cfg.scenario["out_file"]).with_suffix(".jsonl")
@@ -246,14 +758,24 @@ def generate_paralinguistic_dialogues(cfg):
     dialogues_per_scenario = cfg.dialogue.get("per_scenario", 3)
 
     # Control mode configuration
-    # Two-tier probability system:
-    # - First control request: Higher probability to ensure most dialogues have at least one control
-    # - Subsequent requests: Lower probability to avoid overwhelming the dialogue with controls
-    control_request_frequency_first = cfg.dialogue.get("control_request_frequency_first", 0.8)  # 80% for first control
-    control_request_frequency_subsequent = cfg.dialogue.get("control_request_frequency_subsequent", 0.4)  # 40% for subsequent
-    control_dimension = cfg.dialogue.get("control_dimension", "speed")  # Fixed dimension from config
+    control_request_frequency_first = cfg.dialogue.get("control_request_frequency_first", 0.8)
+    control_request_frequency_subsequent = cfg.dialogue.get("control_request_frequency_subsequent", 0.4)
+    control_dimension = cfg.dialogue.get("control_dimension", "speed")
 
-    # Load paralinguistic pools from config (single source of truth)
+    # Multi-para mode configuration
+    multi_para_mode = cfg.dialogue.get("multi_para_mode", False)
+    multi_para_probability = cfg.dialogue.get("multi_para_probability", 0.5)
+    max_para_tags = cfg.dialogue.get("max_para_tags", 3)
+    multi_para_dimensions = cfg.dialogue.get("multi_para_dimensions", ["speed", "pitch", "emotion", "volume", "age"])
+
+    # Multi-para config for helper functions
+    multi_para_config = {
+        "allowed_dimensions": multi_para_dimensions,
+        "add_probability": multi_para_probability,
+        "max_tags": max_para_tags
+    }
+
+    # Load paralinguistic pools from config
     paralinguistic_pools = cfg.get("paralinguistic_pools", {})
 
     logging.info(f"Generating PARALINGUISTIC dialogues:")
@@ -263,7 +785,13 @@ def generate_paralinguistic_dialogues(cfg):
     logging.info(f"  Dialogues per Scenario: {dialogues_per_scenario}")
     logging.info(f"  Control Request Frequency (First): {control_request_frequency_first}")
     logging.info(f"  Control Request Frequency (Subsequent): {control_request_frequency_subsequent}")
-    logging.info(f"  Control Dimension (Fixed): {control_dimension}")
+    if multi_para_mode:
+        logging.info(f"  ═══ MULTI-PARA MODE ENABLED ═══")
+        logging.info(f"  Multi-Para Probability: {multi_para_probability}")
+        logging.info(f"  Max Para Tags: {max_para_tags}")
+        logging.info(f"  Multi-Para Dimensions: {multi_para_dimensions}")
+    else:
+        logging.info(f"  Control Dimension (Fixed): {control_dimension}")
 
     for scenario in tqdm(scenarios, desc="dialogues"):
         scenario_desc = json.dumps(scenario, ensure_ascii=False)
@@ -271,14 +799,30 @@ def generate_paralinguistic_dialogues(cfg):
         for dialogue_idx in range(dialogues_per_scenario):
             dialogue_turns = []
             conversation_history = []
-            control_request_info = None  # Initialize control signal (passed from User to Agent)
 
-            # Track if this dialogue has had any control request yet (for two-tier probability)
+            # Track if dialogue has had any control request yet
             has_had_control_request = False
 
-            # Track last emotion tag for each role (for continuity in normal mode)
-            last_user_emotion_tag = None  # Format: (dimension, value) e.g., ("emotion", "happy")
-            last_agent_emotion_tag = None
+            # Track last para tag for agent (for continuity in normal mode AND for LLM to know current state)
+            last_para_tag = None  # Format: Dict[str, str] - full para tags dict
+
+            # ═══════════════════════════════════════════════════════════════
+            # RESTRICT GENDER POOL PER DIALOGUE
+            # ═══════════════════════════════════════════════════════════════
+            # For each dialogue, randomly choose EITHER (man, normal) OR (woman, normal)
+            # This prevents confusing gender switches within a single conversation
+            dialogue_paralinguistic_pools = paralinguistic_pools.copy()
+            if "gender" in paralinguistic_pools:
+                # Randomly choose which gender pair to use for this dialogue
+                use_male = random.choice([True, False])
+                if use_male:
+                    # Use (man, normal) only
+                    dialogue_paralinguistic_pools["gender"] = ["male", "normal"]
+                    logging.info(f"  -> Gender pool for this dialogue: (male, normal)")
+                else:
+                    # Use (woman, normal) only
+                    dialogue_paralinguistic_pools["gender"] = ["female", "normal"]
+                    logging.info(f"  -> Gender pool for this dialogue: (female, normal)")
 
             context_info = f"Scenario: {scenario_desc}\n\n"
             num_turns = random.randint(min_turns, max_turns)
@@ -287,268 +831,125 @@ def generate_paralinguistic_dialogues(cfg):
                 num_turns += 1
             logging.info(f"  Generating {scenario['id']}_{dialogue_idx + 1} with {num_turns} turns")
 
-            for turn in range(num_turns):
-                if turn % 2 == 0:
-                    # ============ USER's TURN ============
-                    # RANDOM SWITCH: Decide if this user turn should include a control request
-                    # Only allow control requests after turn 0 (first turn should be normal greeting)
-                    # Control signal will be passed to the next agent turn
-                    # TWO-TIER PROBABILITY SYSTEM:
-                    # - First control request: Higher probability (e.g., 0.8) to ensure coverage
-                    # - Subsequent requests: Lower probability (e.g., 0.4) to avoid overwhelming dialogue
-                    can_make_control_request = turn > 0
+            # ═══════════════════════════════════════════════════════════════
+            # MAIN LOOP: Process turn pairs (user + agent) together
+            # ═══════════════════════════════════════════════════════════════
+            num_turn_pairs = num_turns // 2
 
-                    if can_make_control_request:
-                        if has_had_control_request:
-                            # Already had a control request - use LOWER probability for subsequent requests
-                            is_control_request = random.random() < control_request_frequency_subsequent
-                            if is_control_request:
-                                logging.info(f"    [CONTROL DECISION] Turn {turn}: Subsequent control (prob={control_request_frequency_subsequent})")
-                        else:
-                            # First control request - use HIGHER probability
-                            is_control_request = random.random() < control_request_frequency_first
-                            if is_control_request:
-                                logging.info(f"    [CONTROL DECISION] Turn {turn}: First control (prob={control_request_frequency_first})")
-                    else:
-                        is_control_request = False
+            for turn_pair_idx in range(num_turn_pairs):
+                is_first_turn = (turn_pair_idx == 0)
+                turn_idx_user = turn_pair_idx * 2
+                turn_idx_agent = turn_pair_idx * 2 + 1
 
-                    # Initialize control_request_info for this user turn
-                    # This will be used by the agent in the NEXT turn (turn + 1)
-                    current_turn_control_info = None
+                # ─────────────────────────────────────────────────────────────
+                # STEP 1: Determine mode for this turn pair
+                # ─────────────────────────────────────────────────────────────
+                is_control_mode = _determine_control_mode(
+                    turn_pair_idx,
+                    has_had_control_request,
+                    control_request_frequency_first,
+                    control_request_frequency_subsequent
+                )
 
-                    if is_control_request:
-                        # Mark that this dialogue has now had a control request
-                        if not has_had_control_request:
-                            has_had_control_request = True
-                            logging.info(f"    [CONTROL TRACKING] First control request marked for this dialogue")
-                        # Determine current value to exclude from selection
-                        # Check if last agent tag matches the control dimension
-                        current_value_to_exclude = None
-                        if last_agent_emotion_tag:
-                            last_dim, last_val = last_agent_emotion_tag
-                            if last_dim == control_dimension:
-                                current_value_to_exclude = last_val
-                                logging.info(f"    [CONTROL] Current agent state: {last_dim}={last_val}")
-
-                        # Select a control target value for the fixed dimension (excluding current value)
-                        ctrl_dim, ctrl_value = select_control_target(
-                            paralinguistic_pools, control_dimension, current_value_to_exclude
-                        )
-                        current_turn_control_info = (ctrl_dim, ctrl_value)
-                        logging.info(f"    [CONTROL] Turn {turn}: User requesting {ctrl_dim}={ctrl_value}")
-
-                    if turn == 0:
-                        # First turn - start normal conversation
-                        user_instruction = (
-                            f"{context_info}"
-                            f"This is the start of the conversation. "
-                            f"Generate the user's first message based on the scenario. "
-                            f"Be natural and conversational. Only output the user's utterance, nothing else."
-                        )
-                    else:
-                        history_text = "\n".join(conversation_history)
-
-                        if is_control_request:
-                            # CONTROL MODE: User requests voice change (LLM generates diverse phrasing)
-                            user_instruction = (
-                                f"{context_info}"
-                                f"Conversation so far:\n{history_text}\n\n"
-                                f"Generate the user's next response where they ask the agent to change their voice.\n"
-                                f"Specifically, ask them to adjust their {ctrl_dim} to be '{ctrl_value}'.\n"
-                                f"Be creative and natural - use your own words, don't use a template.\n"
-                                f"Examples of natural requests:\n"
-                                f"- For speed=fast: 'Can you talk faster?', 'Please speed up', 'Speak quicker'\n"
-                                f"- For emotion=happy: 'Sound happier!', 'Be more cheerful', 'Can you be more upbeat?'\n"
-                                f"- For volume=loud: 'Speak louder', 'I can't hear you well', 'Increase your volume'\n\n"
-                                f"Generate a DIVERSE, NATURAL request for {ctrl_dim}='{ctrl_value}'.\n"
-                                f"Then optionally continue with the conversation topic.\n"
-                                f"Only output the user's utterance, nothing else."
-                            )
-                        else:
-                            # USUAL MODE: Normal conversation turn
-                            user_instruction = (
-                                f"{context_info}"
-                                f"Conversation so far:\n{history_text}\n\n"
-                                f"Generate the user's next response based on the agent's last message. "
-                                f"Be natural and conversational. Only output the user's utterance, nothing else."
-                            )
-
-                    user_messages = [
-                        {"role": "system", "content": control_user_prompt},
-                        {"role": "user", "content": user_instruction}
-                    ]
-
-                    # Retry logic
-                    max_retries = 3
-                    user_utterance = None
-
-                    for retry in range(max_retries):
-                        try:
-                            user_utterance = chat_completion(
-                                user_model,
-                                user_messages,
-                                max_tokens=512,
-                                temperature=0.9,
-                                top_p=0.9
-                            ).strip()
-
-                            user_utterance = re.sub(r'^User:\s*', '', user_utterance, flags=re.IGNORECASE)
-
-                            if user_utterance:
-                                break
-                            else:
-                                logging.warning(f"Empty response from user LLM at turn {turn}, retry {retry + 1}/{max_retries}")
-
-                        except Exception as e:
-                            logging.error(f"Error in user LLM turn {turn} (retry {retry + 1}/{max_retries}): {e}")
-                            if retry < max_retries - 1:
-                                wait_time = 2 ** retry
-                                logging.info(f"Waiting {wait_time}s before retry...")
-                                time.sleep(wait_time)
-                            else:
-                                logging.error(f"Failed after {max_retries} retries, breaking dialogue...")
-
-                    if user_utterance:
-                        dialogue_turns.append(f"User: {user_utterance}")
-                        conversation_history.append(f"User: {user_utterance}")
-                        # Pass control signal to next agent turn
-                        control_request_info = current_turn_control_info
-                    else:
-                        logging.error(f"Could not generate user response after {max_retries} retries, ending dialogue early")
-                        break
-
-                else:
-                    # ============ AGENT's TURN ============
-
-                    # Check if user made a control request in previous turn
-                    if control_request_info:
-                        # CONTROL MODE: User requested voice change - Agent applies it
-                        ctrl_dim, ctrl_value = control_request_info
-
-                        # Create SINGLE tag for requested dimension
-                        para_tags = {ctrl_dim: ctrl_value}
-                        para_tag_str = format_paralinguistic_tags(para_tags)
-
-                        # Instruction for agent to acknowledge the control request
-                        para_instruction = (
-                            f"\n\nIMPORTANT: The user just asked you to change your {ctrl_dim} to '{ctrl_value}'.\n"
-                            f"You should:\n"
-                            f"1. Acknowledge the request naturally (e.g., 'Sure!', 'Of course', 'No problem', 'Okay!')\n"
-                            f"2. Then continue helping with their question/topic\n\n"
-                            f"Your response MUST start with the tag in parentheses EXACTLY as shown:\n"
-                            f"{para_tag_str}\n\n"
-                            f"Format: {para_tag_str} [brief acknowledgment] [continue conversation]\n"
-                        )
-
-                        # Update last emotion tag for agent
-                        last_agent_emotion_tag = (ctrl_dim, ctrl_value)
-
-                        # Reset control request after processing
-                        control_request_info = None
-
-                    else:
-                        # USUAL MODE - Normal agent response
-                        # Check if there's a last emotion tag to maintain continuity
-                        if last_agent_emotion_tag:
-                            # EMOTION TAG CONTINUITY: Copy the last emotion tag
-                            ctrl_dim, ctrl_value = last_agent_emotion_tag
-                            para_tags = {ctrl_dim: ctrl_value}
-                            para_tag_str = format_paralinguistic_tags(para_tags)
-
-                            # Instruction to copy the emotion tag for continuity
-                            para_instruction = (
-                                f"\n\nIMPORTANT: For emotional continuity, maintain the same {ctrl_dim} as your last response ('{ctrl_value}').\n"
-                                f"Your response MUST start with the tag in parentheses EXACTLY as shown:\n"
-                                f"{para_tag_str}\n\n"
-                                f"Format: {para_tag_str} [your response]\n"
-                                f"This ensures your voice characteristics remain consistent throughout the conversation.\n"
-                            )
-                            logging.info(f"    [CONTINUITY] Turn {turn}: Agent maintaining {ctrl_dim}={ctrl_value}")
-                        else:
-                            # No emotion tag - normal response without tags
-                            para_tags = None
-                            para_instruction = ""
-
-                    history_text = "\n".join(conversation_history)
-                    agent_instruction = (
-                        f"{context_info}"
-                        f"Conversation so far:\n{history_text}\n\n"
-                        f"Generate the agent's response to the user's last message. "
-                        f"Be helpful, professional, and natural. "
-                        f"{para_instruction}"
-                        f"Only output the agent's utterance (with the paralinguistic tag if specified), nothing else."
+                # Generate control para tags if in control mode
+                control_para_tags = None
+                if is_control_mode:
+                    control_para_tags = _generate_control_para_tags(
+                        multi_para_mode,
+                        multi_para_config,
+                        control_dimension,
+                        last_para_tag,
+                        dialogue_paralinguistic_pools  # Use dialogue-specific pool
                     )
+                    has_had_control_request = True
 
-                    # Choose appropriate prompt based on mode
-                    if para_instruction:
-                        # CONTROL MODE: Use control agent prompt with tag instructions
-                        agent_messages = [
-                            {"role": "system", "content": control_agent_prompt},
-                            {"role": "user", "content": agent_instruction}
-                        ]
+                    if multi_para_mode and len(control_para_tags) > 1:
+                        logging.info(f"    [CONTROL] Turn {turn_idx_user}: Multi-para mode - {control_para_tags}")
                     else:
-                        # USUAL MODE: Use normal agent prompt (no tags mentioned)
-                        agent_messages = [
-                            {"role": "system", "content": agent_system_prompt},
-                            {"role": "user", "content": agent_instruction}
-                        ]
+                        ctrl_dim, ctrl_value = next(iter(control_para_tags.items()))
+                        logging.info(f"    [CONTROL] Turn {turn_idx_user}: Single-para mode - {ctrl_dim}={ctrl_value}")
 
-                    # Retry logic
-                    max_retries = 3
-                    agent_utterance = None
+                # ─────────────────────────────────────────────────────────────
+                # STEP 2: Generate User utterance
+                # ─────────────────────────────────────────────────────────────
+                user_instruction = _build_user_instruction(
+                    is_first_turn,
+                    is_control_mode,
+                    control_para_tags,
+                    context_info,
+                    conversation_history,
+                    multi_para_mode,
+                    last_para_tag=last_para_tag  # Pass current para tags so LLM knows what to change FROM
+                )
 
-                    for retry in range(max_retries):
-                        try:
-                            agent_utterance = chat_completion(
-                                agent_model,
-                                agent_messages,
-                                max_tokens=512,
-                                temperature=0.9,
-                                top_p=0.9
-                            ).strip()
+                user_utterance = _call_llm_with_retry(
+                    user_model,
+                    control_user_prompt,
+                    user_instruction,
+                    "User:",
+                    turn_idx_user
+                )
 
-                            # Clean up if LLM adds "Agent:" prefix
-                            agent_utterance = re.sub(r'^Agent:\s*', '', agent_utterance, flags=re.IGNORECASE)
+                if not user_utterance:
+                    logging.error(f"Could not generate user response, ending dialogue early")
+                    break
 
-                            if agent_utterance:
-                                break
-                            else:
-                                logging.warning(f"Empty response from agent LLM at turn {turn}, retry {retry + 1}/{max_retries}")
+                # Add to dialogue
+                dialogue_turns.append(f"User: {user_utterance}")
+                conversation_history.append(f"User: {user_utterance}")
 
-                        except Exception as e:
-                            logging.error(f"Error in agent LLM turn {turn} (retry {retry + 1}/{max_retries}): {e}")
-                            if retry < max_retries - 1:
-                                wait_time = 2 ** retry
-                                logging.info(f"Waiting {wait_time}s before retry...")
-                                time.sleep(wait_time)
-                            else:
-                                logging.error(f"Failed after {max_retries} retries, breaking dialogue...")
+                # ─────────────────────────────────────────────────────────────
+                # STEP 3: Generate Agent utterance
+                # ─────────────────────────────────────────────────────────────
+                agent_instruction, agent_para_tags, use_control_prompt = _build_agent_instruction_and_tags(
+                    is_control_mode,
+                    control_para_tags,
+                    last_para_tag,
+                    context_info,
+                    conversation_history,
+                    multi_para_mode,
+                    dialogue_paralinguistic_pools  # Use dialogue-specific pool
+                )
 
-                    if agent_utterance:
-                        # Ensure the paralinguistic tag is present if it was requested
-                        if para_tags and not agent_utterance.startswith("("):
-                            # If LLM didn't include the tag, add it ourselves
-                            para_tag_str = format_paralinguistic_tags(para_tags)
-                            agent_utterance = f"{para_tag_str} {agent_utterance}"
+                # Choose system prompt
+                agent_sys_prompt = control_agent_prompt if use_control_prompt else agent_system_prompt
 
-                        full_agent_turn = f"Agent: {agent_utterance}"
-                        dialogue_turns.append(full_agent_turn)
+                agent_utterance = _call_llm_with_retry(
+                    agent_model,
+                    agent_sys_prompt,
+                    agent_instruction,
+                    "Agent:",
+                    turn_idx_agent
+                )
 
-                        # Extract tags from agent utterance and update tracking
-                        clean_utterance, extracted_tags = extract_paralinguistic_tags(agent_utterance)
+                if not agent_utterance:
+                    logging.error(f"Could not generate agent response, ending dialogue early")
+                    break
 
-                        # Update last emotion tag for agent (for continuity tracking)
-                        if extracted_tags:
-                            # Extract the dimension and value
-                            tag_dim, tag_value = next(iter(extracted_tags.items()))
-                            last_agent_emotion_tag = (tag_dim, tag_value)
-                            logging.info(f"    [TRACKING] Agent emotion tag updated: {tag_dim}={tag_value}")
+                # Ensure paralinguistic tag is present if expected
+                if agent_para_tags and not agent_utterance.startswith("("):
+                    para_tag_str = format_paralinguistic_tags(agent_para_tags)
+                    agent_utterance = f"{para_tag_str} {agent_utterance}"
 
-                        # For conversation history, use clean version (without tags)
-                        conversation_history.append(f"Agent: {clean_utterance}")
-                    else:
-                        logging.error(f"Could not generate agent response after {max_retries} retries, ending dialogue early")
-                        break
+                # Add to dialogue
+                dialogue_turns.append(f"Agent: {agent_utterance}")
+
+                # Extract tags and update tracking
+                clean_utterance, extracted_tags = extract_paralinguistic_tags(agent_utterance)
+
+                # IMPORTANT: Only store emotion tags if we were EXPECTING them (agent_para_tags is not None)
+                # This prevents the LLM from accidentally initializing emotion before control mode happens
+                if extracted_tags and agent_para_tags is not None:
+                    # Store ALL tags, not just the first one
+                    last_para_tag = extracted_tags.copy()
+                    tag_summary = ", ".join([f"{k}={v}" for k, v in extracted_tags.items()])
+                    logging.info(f"    [TRACKING] Agent tags updated: {tag_summary}")
+                elif extracted_tags and agent_para_tags is None:
+                    # LLM generated tags when it shouldn't have - log warning
+                    logging.warning(f"    [WARNING] LLM generated unexpected tags {extracted_tags} - ignoring them")
+
+                # Add clean version to conversation history
+                conversation_history.append(f"Agent: {clean_utterance}")
 
             # Save dialogue (tags embedded in parentheses)
             if dialogue_turns:
@@ -562,72 +963,13 @@ def generate_paralinguistic_dialogues(cfg):
                     print("...")
                 print("=" * 60)
 
-# ────────────────────────────  POST-PROCESSING  ─────────────────────────────
+# ────────────────────────────────  TTS - IndexTTS2  ────────────────────────────────────
 
-def analyze_paralinguistic_distribution(cfg):
-    """
-    Analyze the distribution of paralinguistic attributes across all generated dialogues.
-    Extracts tags from dialogue .txt files (parentheses format).
-    Creates a statistical report.
-    """
-    src_dir = Path(cfg.dialogue["out_dir"])
-    report_path = src_dir / "paralinguistic_analysis.json"
+# ═══════════════════════════════════════════════════════════════════════════
+# TTS HELPER FUNCTIONS - Refactored for readability
+# ═══════════════════════════════════════════════════════════════════════════
 
-    # Load paralinguistic pools from config
-    paralinguistic_pools = cfg.get("paralinguistic_pools", {})
-
-    # Initialize counters
-    distribution = {dimension: {} for dimension in paralinguistic_pools.keys()}
-    total_agent_turns = 0
-    turns_with_tags = 0
-
-    # Process all dialogue .txt files
-    for dialogue_file in src_dir.glob("*.txt"):
-        with open(dialogue_file, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-
-        for line in lines:
-            line = line.strip()
-            if line.startswith("Agent:"):
-                total_agent_turns += 1
-
-                # Extract tags from agent utterance
-                agent_text = line.replace("Agent:", "").strip()
-                clean_text, para_tags = extract_paralinguistic_tags(agent_text)
-
-                if para_tags:
-                    turns_with_tags += 1
-
-                    # Count each dimension value
-                    for dimension, value in para_tags.items():
-                        if dimension in distribution:
-                            if value in distribution[dimension]:
-                                distribution[dimension][value] += 1
-                            else:
-                                distribution[dimension][value] = 1
-
-    # Create report
-    report = {
-        "total_agent_turns": total_agent_turns,
-        "turns_with_paralinguistic_tags": turns_with_tags,
-        "coverage": turns_with_tags / total_agent_turns if total_agent_turns > 0 else 0,
-        "distribution": distribution
-    }
-
-    # Save report
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=2)
-
-    logging.info(f"Paralinguistic analysis saved to: {report_path}")
-    print(f"\n=== Paralinguistic Analysis ===")
-    print(f"Total Agent Turns: {total_agent_turns}")
-    print(f"Turns with Tags: {turns_with_tags}")
-    print(f"Coverage: {report['coverage']:.2%}")
-    print("=" * 60)
-
-# ────────────────────────────────  TTS - XTTS2  ────────────────────────────────────
-
-def detect_speaker_gender(spk_audio_path, spk_audio_base_dir):
+def _detect_speaker_gender(spk_audio_path, spk_audio_base_dir):
     """
     Detect the gender of a speaker by checking if the audio file exists in male or female subdirectories.
 
@@ -640,7 +982,7 @@ def detect_speaker_gender(spk_audio_path, spk_audio_base_dir):
     """
     spk_filename = Path(spk_audio_path).name
 
-    # Check if file exists in male directory
+    # Check if file ei txists in male directory
     male_path = Path(spk_audio_base_dir) / "male" / spk_filename
     if male_path.exists():
         logging.info(f"  -> Detected gender: male (found in male/)")
@@ -655,10 +997,11 @@ def detect_speaker_gender(spk_audio_path, spk_audio_base_dir):
     logging.warning(f"  -> Could not detect gender for {spk_filename}")
     return None
 
-def pre_detect_first_gender_tag(script):
+def _pre_detect_first_gender_tag(script):
     """
     Pre-scan the script to find the first gender tag in agent turns.
     This is used to determine the initial speaker gender (opposite of first switch).
+    Skips "normal" tags and looks for actual gender switches (male/female).
 
     Args:
         script: List of (role, text) tuples
@@ -673,13 +1016,15 @@ def pre_detect_first_gender_tag(script):
             _, para_tags = extract_paralinguistic_tags(text)
             if para_tags and "gender" in para_tags:
                 first_gender = para_tags["gender"]
-                logging.info(f"  -> First gender tag detected: {first_gender}")
-                return first_gender
+                # Skip "normal" - continue searching for actual gender switch
+                if first_gender.lower() != "normal":
+                    logging.info(f"  -> First gender tag detected: {first_gender}")
+                    return first_gender
 
     logging.info(f"  -> No gender tags found in script")
     return None
 
-def get_opposite_gender(gender_value):
+def _get_opposite_gender(gender_value):
     """
     Get the opposite gender for initial speaker setup.
 
@@ -691,9 +1036,7 @@ def get_opposite_gender(gender_value):
     """
     # Map to standard names
     gender_map = {
-        "woman": "female",
         "female": "female",
-        "man": "male",
         "male": "male"
     }
 
@@ -706,7 +1049,7 @@ def get_opposite_gender(gender_value):
     else:
         return None
 
-def apply_audio_post_processing(audio_tensor, sample_rate, para_tags):
+def _apply_audio_post_processing(audio_tensor, sample_rate, para_tags):
     """
     Apply post-processing to audio based on paralinguistic tags.
 
@@ -750,10 +1093,18 @@ def apply_audio_post_processing(audio_tensor, sample_rate, para_tags):
                 temp_output_path = temp_output.name
 
             try:
-                # Save current audio to temporary input file
-                # Convert numpy array back to tensor for saving
-                temp_audio_tensor = torch.from_numpy(audio_np).float()
-                torchaudio.save(temp_input_path, temp_audio_tensor, sample_rate)
+                # Save current audio to temporary input file using soundfile (better compatibility)
+                # AudioStretch needs standard PCM format
+                # Ensure audio_np is in correct shape: (channels, samples) -> (samples, channels) for soundfile
+                if audio_np.shape[0] == 1:
+                    # Mono: (1, samples) -> (samples,)
+                    audio_for_save = audio_np[0]
+                else:
+                    # Stereo or multi-channel: (channels, samples) -> (samples, channels)
+                    audio_for_save = audio_np.T
+
+                # Save as 16-bit PCM WAV (most compatible format)
+                sf.write(temp_input_path, audio_for_save, sample_rate, subtype='PCM_16')
 
                 # Convert Speed to Ratio for AudioStretch
                 # Speed 2.0 (Double speed) -> Ratio 0.5 (Half length)
@@ -777,15 +1128,28 @@ def apply_audio_post_processing(audio_tensor, sample_rate, para_tags):
 
                 stretcher.save(temp_output_path)
 
-                # Load the processed audio back
-                processed_audio, processed_sr = torchaudio.load(temp_output_path)
+                # Load the processed audio back using soundfile
+                processed_audio_np, processed_sr = sf.read(temp_output_path, dtype='float32')
+
+                # Ensure shape is (1, samples) for mono
+                if processed_audio_np.ndim == 1:
+                    # Mono: (samples,) -> (1, samples)
+                    processed_audio_np = processed_audio_np[np.newaxis, :]
+                else:
+                    # Multi-channel: (samples, channels) -> (channels, samples)
+                    processed_audio_np = processed_audio_np.T
 
                 # Resample if necessary
                 if processed_sr != sample_rate:
-                    processed_audio = torchaudio.functional.resample(processed_audio, processed_sr, sample_rate)
+                    # Use librosa for resampling numpy arrays
+                    processed_audio_np = librosa.resample(
+                        processed_audio_np,
+                        orig_sr=processed_sr,
+                        target_sr=sample_rate
+                    )
 
-                # Convert back to numpy
-                audio_np = processed_audio.cpu().numpy()
+                # Update audio_np with processed result
+                audio_np = processed_audio_np
 
                 logging.info(f"     Audio shape after: {audio_np.shape}")
 
@@ -796,28 +1160,7 @@ def apply_audio_post_processing(audio_tensor, sample_rate, para_tags):
                     os.remove(temp_input_path)
                 if os.path.exists(temp_output_path):
                     os.remove(temp_output_path)
-
-    # Apply PITCH modification (pitch-shift)
-    # if "pitch" in para_tags:
-    #     pitch_map = {
-    #         "very_low": -4,     # semitones
-    #         "low": -2,
-    #         "normal": 0,
-    #         "high": 2,
-    #         "very_high": 4
-    #     }
-    #     pitch_shift = pitch_map.get(para_tags["pitch"], 0)
-
-    #     if pitch_shift != 0:
-    #         logging.info(f"  -> Applying pitch: {para_tags['pitch']} (shift: {pitch_shift} semitones)")
-    #         # Process each channel
-    #         processed_channels = []
-    #         for ch in audio_np:
-    #             # Pitch-shift
-    #             shifted = librosa.effects.pitch_shift(ch, sr=sample_rate, n_steps=pitch_shift)
-    #             processed_channels.append(shifted)
-    #         audio_np = np.array(processed_channels)
-
+                    
     # Apply VOLUME modification (amplitude scaling)
     if "volume" in para_tags:
         volume_map = {
@@ -839,27 +1182,58 @@ def apply_audio_post_processing(audio_tensor, sample_rate, para_tags):
     audio_tensor = torch.from_numpy(audio_np).float()
     return audio_tensor
 
-def get_emotion_reference_audio(para_tags, emotion_audio_pool_dir, speaker_gender=None):
+def _get_emotion_reference_audio(para_tags, emotion_audio_pool_dir, speaker_gender=None, emo_audio_cache=None):
     """
     Map paralinguistic tags to emotion reference audio files.
-    Randomly selects from multiple reference files in each category.
+    Uses cache to reuse same audio for same tag within a dialogue.
     Uses IndexTTS-2's emotion reference audio feature (separate style prompt).
+
+    Special handling for "normal" value:
+    - When value is "normal", returns None to use speaker reference only
+    - No emotion reference audio is applied
+    - This allows natural voice without any style modification
+
+    Special handling for gender mode (CROSS-GENDER STYLE TRANSFER):
+    - Uses speaker_gender + target gender to select cross-gender reference
+    - E.g., male speaker + (gender:female) → man_to_woman
+    - E.g., female speaker + (gender:male) → woman_to_man
+    - Speaker voice identity stays the same, only style changes
 
     Special handling for pitch mode:
     - Uses speaker_gender to select gender-appropriate pitch reference
     - E.g., "high" pitch + male speaker → high_pitch_man
     - E.g., "low" pitch + female speaker → low_pitch_woman
 
+    Special handling for "very_" prefix:
+    - Strips "very_" prefix when searching for directories
+    - E.g., "very_fast" → searches "fast" directory
+    - Returns alpha=1.0 for "very_*" tags, alpha=0.6 for normal tags
+
     Args:
-        para_tags: Dict of paralinguistic tags (e.g., {"gender": "man"} or {"age": "elderly"})
+        para_tags: Dict of paralinguistic tags (e.g., {"gender": "female"} or {"age": "elderly"})
         emotion_audio_pool_dir: Base directory containing emotion reference audio pool
-        speaker_gender: "male" or "female" (required for pitch mode)
+        speaker_gender: "male" or "female" (required for gender mode and pitch mode)
+        emo_audio_cache: Optional dict to cache selected audio for each tag.
+                         Key: (dimension, value), Value: audio_path
+                         Same tag reuses cached audio, different tag samples new audio.
 
     Returns:
-        Path to emotion reference audio file, or None if no tags or file not found
+        Tuple of (audio_path, emo_alpha) or (None, 1.0) if no tags or file not found
+        - audio_path: Path to emotion reference audio file
+        - emo_alpha: Emotion strength (1.0 for "very_*" or gender transfer, 0.6 for normal)
+
+    Note:
+        With emo_audio_cache: Same tag reuses cached audio (consistency within dialogue)
+        Without cache: Randomly samples each time (variety across dialogues)
 
     Audio pool structure:
         emo/
+        ├── man_to_woman/         # Gender: cross-gender style transfer
+        │   ├── man_to_woman_0.mp3
+        │   └── ...
+        ├── woman_to_man/         # Gender: cross-gender style transfer
+        │   ├── woman_to_man_0.mp3
+        │   └── ...
         ├── sad/
         │   ├── sad_0.mp3
         │   ├── sad_1.mp3
@@ -877,12 +1251,110 @@ def get_emotion_reference_audio(para_tags, emotion_audio_pool_dir, speaker_gende
         └── ...
     """
     if not para_tags:
-        return None
+        return None, 1.0
 
     # Get the dimension and value (should be only ONE per utterance)
     dimension, value = next(iter(para_tags.items()))
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SPECIAL HANDLING FOR "NORMAL" VALUE - USE SPEAKER REFERENCE ONLY
+    # ═══════════════════════════════════════════════════════════════════════════
+    if value.lower() == "normal":
+        logging.info(f"  ═══ NORMAL MODE ═══")
+        logging.info(f"  -> Tag {dimension}=normal detected - using speaker reference ONLY (no emotion reference)")
+        return None, 1.0
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # CHECK CACHE - Same tag reuses same audio within dialogue
+    # ═══════════════════════════════════════════════════════════════════════════
+    cache_key = (dimension, value)
+    if emo_audio_cache is not None and cache_key in emo_audio_cache:
+        cached_audio, cached_alpha = emo_audio_cache[cache_key]
+        logging.info(f"  -> ✓ CACHE HIT: Reusing {Path(cached_audio).name} for {dimension}={value}")
+        return cached_audio, cached_alpha
+
     logging.info(f"  -> Looking for emotion reference audio: {dimension}={value}")
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SPECIAL HANDLING FOR GENDER MODE - CROSS-GENDER STYLE TRANSFER
+    # ═══════════════════════════════════════════════════════════════════════════
+    if dimension == "gender":
+        logging.info(f"  ═══ GENDER MODE (CROSS-GENDER STYLE TRANSFER) ═══")
+        logging.info(f"  -> Current speaker gender: {speaker_gender}, Target gender: {value}")
+
+        if not speaker_gender:
+            logging.warning(f"  -> ⚠️  Gender mode requires speaker gender, but none provided. Skipping.")
+            return None, 1.0
+
+        # Map current speaker gender + target gender → emotion reference directory
+        # male speaker + (gender:female) → man_to_woman
+        # female speaker + (gender:male) → woman_to_man
+        if speaker_gender == "male" and value == "female":
+            dir_name = "man_to_woman"
+            logging.info(f"  -> Cross-gender transfer: male speaker pretending to be female → {dir_name}")
+        elif speaker_gender == "female" and value == "male":
+            dir_name = "woman_to_man"
+            logging.info(f"  -> Cross-gender transfer: female speaker pretending to be male → {dir_name}")
+        elif speaker_gender == value:
+            # Same gender - no transfer needed
+            logging.info(f"  -> Speaker is already {speaker_gender}, target is {value} - no transfer needed")
+            return None, 1.0
+        else:
+            logging.warning(f"  -> Unknown gender combination: speaker={speaker_gender}, target={value}")
+            return None, 1.0
+
+        # Look for the emotion reference directory
+        category_dir = Path(emotion_audio_pool_dir) / dir_name
+
+        if not category_dir.exists():
+            logging.warning(f"  -> ❌ Gender reference directory not found: {category_dir}")
+            return None, 1.0
+
+        # Get all audio files
+        audio_files = list(category_dir.glob("*.mp3")) + list(category_dir.glob("*.wav"))
+
+        if not audio_files:
+            logging.warning(f"  -> ❌ No audio files found in {category_dir}")
+            return None, 1.0
+
+        # Randomly select one
+        selected_audio = random.choice(audio_files)
+        result_path = str(selected_audio)
+        result_alpha = 1.0  # Use alpha=1.0 for strong gender style transfer
+
+        # Save to cache
+        if emo_audio_cache is not None:
+            emo_audio_cache[cache_key] = (result_path, result_alpha)
+            logging.info(f"  -> ✓ CACHE SAVE: {selected_audio.name} for {dimension}={value}")
+
+        logging.info(f"  -> ✓ Selected gender reference: {selected_audio.name} from {category_dir}")
+        return result_path, result_alpha
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # CHECK FOR "VERY" PREFIX - ONLY FOR EMOTION, SPEED, VOLUME, PITCH
+    # ═══════════════════════════════════════════════════════════════════════════
+    # IMPORTANT: "very" detection only applies to: emotion, speed, volume, pitch
+    # NOT for gender or age tags
+    very_dimensions = ["emotion", "speed", "volume", "pitch"]
+
+    is_very = False
+    if dimension in very_dimensions:
+        # Check if value has "very_" or "very " prefix and determine alpha
+        # Handle both "very_fast" (underscore) and "very afraid" (space) formats
+        is_very = value.startswith("very_") or value.startswith("very ")
+
+    emo_alpha = 1.0 if is_very else 0.6
+
+    # Strip "very_" or "very " prefix for directory lookup
+    if value.startswith("very_"):
+        value_without_very = value.replace("very_", "", 1)
+    elif value.startswith("very "):
+        value_without_very = value.replace("very ", "", 1)
+    else:
+        value_without_very = value
+
+    if is_very:
+        logging.info(f"  -> Detected 'very' prefix on {dimension} - using alpha={emo_alpha} (full strength), searching for '{value_without_very}'")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # SPECIAL HANDLING FOR PITCH MODE - GENDER-AWARE REFERENCE SELECTION
@@ -890,12 +1362,12 @@ def get_emotion_reference_audio(para_tags, emotion_audio_pool_dir, speaker_gende
     if dimension == "pitch":
         if not speaker_gender:
             logging.warning(f"  -> ⚠️  Pitch mode requires speaker gender, but none provided. Using default.")
-            return None
+            return None, emo_alpha
 
         # Map pitch values to gender-specific directory names
         # E.g., "high" + "male" → "high_pitch_man"
         #       "low" + "female" → "low_pitch_woman"
-        pitch_value = value.replace("very_", "")  # Remove "very_" prefix if present
+        pitch_value = value_without_very  # Use stripped value
         gender_suffix = "man" if speaker_gender == "male" else "woman"
         dir_name = f"{pitch_value}_pitch_{gender_suffix}"
 
@@ -910,56 +1382,200 @@ def get_emotion_reference_audio(para_tags, emotion_audio_pool_dir, speaker_gende
             # Add more mappings as needed
         }
 
-        # Get directory name (use mapping if exists, otherwise use value directly)
-        dir_name = value_to_dir_map.get(value, value)
+        # Get directory name (use mapping if exists, otherwise use stripped value)
+        dir_name = value_to_dir_map.get(value_without_very, value_without_very)
 
-        if dir_name != value:
-            logging.info(f"  -> Mapped '{value}' to directory '{dir_name}'")
+        if dir_name != value_without_very:
+            logging.info(f"  -> Mapped '{value_without_very}' to directory '{dir_name}'")
 
     # Look for directory matching the tag value
     category_dir = Path(emotion_audio_pool_dir) / dir_name
 
     if not category_dir.exists():
         logging.warning(f"  -> ❌ Emotion reference directory not found: {category_dir} (will use default)")
-        return None
+        return None, emo_alpha
 
     # Get all audio files in the category (.mp3 or .wav)
     audio_files = list(category_dir.glob("*.mp3")) + list(category_dir.glob("*.wav"))
 
     if not audio_files:
         logging.warning(f"  -> ❌ No audio files found in {category_dir} (will use default)")
-        return None
+        return None, emo_alpha
 
     # Randomly select one audio file
     selected_audio = random.choice(audio_files)
+    result_path = str(selected_audio)
 
-    logging.info(f"  -> ✓ Selected emotion reference: {selected_audio.name} from {category_dir}")
+    # Save to cache
+    if emo_audio_cache is not None:
+        emo_audio_cache[cache_key] = (result_path, emo_alpha)
+        logging.info(f"  -> ✓ CACHE SAVE: {selected_audio.name} for {dimension}={value}")
+
+    logging.info(f"  -> ✓ Selected emotion reference: {selected_audio.name} from {category_dir} (alpha={emo_alpha})")
     logging.info(f"     Full path: {selected_audio}")
-    return str(selected_audio)
+    return result_path, emo_alpha
 
-def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_audio_pool_dir=None):
+def _apply_accumulative_tts(
+    text: str,
+    para_tags: Dict[str, str],
+    tts_model,
+    initial_spk_audio: str,
+    emotion_audio_pool_dir: str,
+    speaker_gender: str = None,
+    sample_rate: int = 24000,
+    emo_audio_cache: Dict = None
+) -> torch.Tensor:
     """
-    Generate TTS audio using IndexTTS2 model with emotion reference audio.
-    Uses IndexTTS-2's disentangled architecture:
-    - Timbre Prompt (spk_audio_prompt): Controls speaker voice identity
-    - Style Prompt (emo_audio_prompt): Controls tone/style from reference audio
+    Apply TTS with ACCUMULATIVE para tags pipeline.
 
-    Handles paralinguistic tags by mapping them to emotion reference audio files.
+    For each para tag:
+    1. Generate audio with current_ref_speaker + para_audio_i
+    2. Use generated audio as new ref_speaker for next iteration
+
+    Pipeline:
+        ref_speaker + para_audio_A → intermediate_A
+        intermediate_A + para_audio_B → intermediate_B
+        ...
+        intermediate_(N-1) + para_audio_N → final_audio
 
     Args:
-        script: List of (role, text) tuples where text may contain (tags)
-        output: Path to save the output wav file
-        tts_model: Pre-initialized IndexTTS2 model instance (reused across all files)
-        spk_audio_dir: Directory containing speaker reference audio files
+        text: Clean text to synthesize (no para tags)
+        para_tags: Dictionary of dimension:value pairs (e.g., {"speed": "fast", "pitch": "high"})
+        tts_model: Pre-initialized IndexTTS2 model
+        initial_spk_audio: Path to initial speaker reference audio
         emotion_audio_pool_dir: Directory containing emotion reference audio pool
-    """
-    sample_rate = 24000  # IndexTTS2 default sample rate
-    tts = tts_model  # Use the pre-initialized model
+        speaker_gender: "male" or "female" (for pitch mode)
+        sample_rate: Audio sample rate (default 24000)
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # GENDER MODE PRE-DETECTION: Find first gender tag to set initial speaker
-    # ═══════════════════════════════════════════════════════════════════════════
-    first_gender_tag = pre_detect_first_gender_tag(script)
+    Returns:
+        torch.Tensor: Final audio after all para tags applied
+    """
+    if not para_tags:
+        # No para tags - just do normal TTS
+        temp_output = f"/tmp/accumulative_final.wav"
+        tts_model.infer(
+            spk_audio_prompt=initial_spk_audio,
+            text=text,
+            output_path=temp_output,
+            use_random=False,
+            verbose=False
+        )
+        wav, sr = torchaudio.load(temp_output)
+        if sr != sample_rate:
+            wav = torchaudio.functional.resample(wav, sr, sample_rate)
+        if os.path.exists(temp_output):
+            os.remove(temp_output)
+        return wav
+
+    # Convert to list for ordered iteration
+    para_tag_list = list(para_tags.items())
+    num_tags = len(para_tag_list)
+
+    logging.info(f"  ═══ ACCUMULATIVE TTS PIPELINE ═══")
+    logging.info(f"  -> {num_tags} para tags to apply: {para_tags}")
+
+    current_ref = initial_spk_audio
+    temp_files = []
+
+    for idx, (dimension, value) in enumerate(para_tag_list):
+        is_last = (idx == num_tags - 1)
+        logging.info(f"  -> Step {idx + 1}/{num_tags}: Applying {dimension}={value}")
+
+        # Get emotion reference audio for this dimension/value
+        single_tag = {dimension: value}
+
+        # Get emotion reference (now handles gender, pitch, and all other modes)
+        # Uses cache: same tag reuses same audio file within dialogue
+        emo_audio_prompt, emo_alpha = _get_emotion_reference_audio(
+            single_tag, emotion_audio_pool_dir, speaker_gender=speaker_gender, emo_audio_cache=emo_audio_cache
+        )
+
+        if not emo_audio_prompt:
+            logging.warning(f"  -> ❌ No emotion reference for {dimension}:{value}, skipping this tag")
+            continue
+
+        # Generate audio with current reference + emotion reference
+        temp_output = f"/tmp/accumulative_step_{idx}.wav"
+        temp_files.append(temp_output)
+
+        try:
+            infer_kwargs = {
+                "spk_audio_prompt": current_ref,
+                "text": text,
+                "output_path": temp_output,
+                "use_random": False,
+                "verbose": False
+            }
+
+            # Add emotion reference with alpha
+            if emo_audio_prompt:
+                infer_kwargs["emo_audio_prompt"] = emo_audio_prompt
+                infer_kwargs["emo_alpha"] = emo_alpha
+                logging.info(f"     Using emotion ref: {Path(emo_audio_prompt).name} (alpha={emo_alpha})")
+
+            tts_model.infer(**infer_kwargs)
+
+            # Load generated audio
+            wav, sr = torchaudio.load(temp_output)
+            if sr != sample_rate:
+                wav = torchaudio.functional.resample(wav, sr, sample_rate)
+
+            # Apply post-processing if needed (e.g., volume adjustment)
+            wav = _apply_audio_post_processing(wav, sample_rate, single_tag)
+
+            if not is_last:
+                # Not the last tag - save as intermediate and use as next reference
+                intermediate_path = f"/tmp/accumulative_intermediate_{idx}.wav"
+                torchaudio.save(intermediate_path, wav, sample_rate)
+                current_ref = intermediate_path
+                temp_files.append(intermediate_path)
+                logging.info(f"     ✓ Step {idx + 1} complete → using as ref for next step")
+            else:
+                # Last tag - this is the final output
+                logging.info(f"     ✓ Final step complete!")
+
+        except Exception as e:
+            logging.error(f"  -> ❌ Error at step {idx + 1}: {e}")
+            continue
+
+    # Clean up temp files (keep the final one until returned)
+    for temp_file in temp_files[:-1]:  # Keep last one
+        if os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except:
+                pass
+
+    # Ensure mono
+    if wav.shape[0] > 1:
+        wav = wav[0:1, :]
+
+    # Clean up the last temp file
+    for temp_file in temp_files:
+        if os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except:
+                pass
+
+    logging.info(f"  ═══ ACCUMULATIVE PIPELINE COMPLETE ═══")
+    return wav
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TTS GENERATION HELPER FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _initialize_speakers(script, spk_audio_dir):
+    """
+    Initialize speaker audio files for User (A) and Agent (B).
+    Handles gender mode pre-detection to set initial agent speaker opposite to first gender tag.
+
+    Returns:
+        Tuple of (spk_A_audio, spk_B_audio, spk_A_gender, spk_B_gender)
+    """
+    # Pre-detect first gender tag
+    first_gender_tag = _pre_detect_first_gender_tag(script)
 
     # Find available speaker audio files
     all_dir = Path(spk_audio_dir) / "all"
@@ -973,14 +1589,13 @@ def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_au
 
     # Select Agent speaker (Speaker B) - depends on gender mode
     if first_gender_tag:
-        # GENDER MODE: Set initial agent speaker to OPPOSITE of first gender tag
-        initial_agent_gender = get_opposite_gender(first_gender_tag)
+        # Gender mode: set initial agent to opposite gender
+        initial_agent_gender = _get_opposite_gender(first_gender_tag)
         if initial_agent_gender:
             logging.info(f"  ═══ GENDER MODE INITIALIZATION ═══")
             logging.info(f"  -> First gender switch will be to: {first_gender_tag}")
             logging.info(f"  -> Setting initial agent gender to: {initial_agent_gender} (opposite)")
 
-            # Sample from the opposite gender directory
             gender_dir = Path(spk_audio_dir) / initial_agent_gender
             gender_audio_files = list(gender_dir.glob("*.wav"))
             if gender_audio_files:
@@ -990,277 +1605,165 @@ def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_au
             else:
                 logging.warning(f"  -> ❌ No audio files in {gender_dir}, using random")
                 spk_B_audio = str(random.choice(remaining))
-                spk_B_gender = detect_speaker_gender(spk_B_audio, spk_audio_dir)
+                spk_B_gender = _detect_speaker_gender(spk_B_audio, spk_audio_dir)
         else:
-            # Fallback to random
             spk_B_audio = str(random.choice(remaining))
-            spk_B_gender = detect_speaker_gender(spk_B_audio, spk_audio_dir)
+            spk_B_gender = _detect_speaker_gender(spk_B_audio, spk_audio_dir)
     else:
-        # NO GENDER MODE: Random selection
+        # No gender mode: random selection
         spk_B_audio = str(random.choice(remaining))
-        spk_B_gender = detect_speaker_gender(spk_B_audio, spk_audio_dir)
+        spk_B_gender = _detect_speaker_gender(spk_B_audio, spk_audio_dir)
 
     logging.info(f"Speaker A (User): {spk_A_audio}")
     logging.info(f"Speaker B (Agent): {spk_B_audio}")
 
-    # Detect gender for User speaker (for pitch mode)
-    spk_A_gender = detect_speaker_gender(spk_A_audio, spk_audio_dir)
+    # Detect gender for User speaker
+    spk_A_gender = _detect_speaker_gender(spk_A_audio, spk_audio_dir)
 
-    # Process each dialogue turn
-    audio_segments = []
+    return spk_A_audio, spk_B_audio, spk_A_gender, spk_B_gender
 
-    # Track current speaker audio for each role (can change in gender mode)
-    current_spk_A_audio = spk_A_audio
-    current_spk_B_audio = spk_B_audio
-    current_spk_A_gender = spk_A_gender
-    current_spk_B_gender = spk_B_gender
 
-    # Track last para tag and emotion reference audio for each role (to avoid redundant resampling)
-    # This applies to ALL para tags (emotion, speed, volume, age, pitch) that use emotion reference
-    last_spk_A_para_tag = None  # Format: (dimension, value) e.g., ("speed", "fast"), ("emotion", "happy")
-    last_spk_A_emo_audio = None  # Last emotion reference audio path
-    last_spk_B_para_tag = None
-    last_spk_B_emo_audio = None
+def _normalize_para_tags(para_tags, multi_para_mode):
+    """
+    Normalize paralinguistic tags and determine if accumulative pipeline should be used.
+    Handles edge case where multi-para includes gender (gender can't be combined).
 
-    for idx, (role, text) in enumerate(script, 1):
-        # Assign speaker based on role (User = spk_A, Agent = spk_B)
-        is_user = role in ("User", "[overlap] User")
-        spk_audio = current_spk_A_audio if is_user else current_spk_B_audio
-        spk_gender = current_spk_A_gender if is_user else current_spk_B_gender
+    Returns:
+        Tuple of (normalized_para_tags, use_accumulative)
+    """
+    if not para_tags:
+        return para_tags, False
 
-        # Get last para tag and reference for this role
-        last_para_tag = last_spk_A_para_tag if is_user else last_spk_B_para_tag
-        last_emo_audio = last_spk_A_emo_audio if is_user else last_spk_B_emo_audio
+    num_tags = len(para_tags)
+    has_gender_tag = "gender" in para_tags
 
-        # Extract paralinguistic tags from text using existing function
-        clean_text, para_tags = extract_paralinguistic_tags(text)
+    # Multi-para mode with multiple tags
+    if multi_para_mode and num_tags > 1:
+        if has_gender_tag:
+            # Gender can't be combined - extract and use only gender
+            logging.warning(f"  -> Multi-para includes gender - using ONLY gender (can't combine)")
+            gender_value = para_tags["gender"]
+            return {"gender": gender_value}, False
+        else:
+            # Valid multi-para tags - use accumulative pipeline
+            logging.info(f"  ═══ MULTI-PARA ACCUMULATIVE MODE ({num_tags} tags) ═══")
+            logging.info(f"  -> Tags: {para_tags}")
+            return para_tags, True
 
-        # Log extracted tags
-        if para_tags:
-            logging.info(f"Turn {idx} ({role}): Extracted tags {para_tags}")
+    # Single tag or multi-para disabled
+    return para_tags, False
 
-        # ═══════════════════════════════════════════════════════════════════════
-        # PARALINGUISTIC TAG HANDLING - THREE MODES
-        # ═══════════════════════════════════════════════════════════════════════
-        # 1. GENDER MODE: Switch speaker reference audio (no emotion ref)
-        # 2. PITCH MODE: Use gender-aware emotion reference
-        # 3. OTHER MODES: Use emotion reference audio
-        # ═══════════════════════════════════════════════════════════════════════
 
-        emo_audio_prompt = None
+def _generate_tts_audio(tts_model, clean_text, para_tags, spk_audio, spk_gender,
+                        emo_audio_prompt, emo_alpha, use_accumulative, emotion_audio_pool_dir, sample_rate,
+                        emo_audio_cache=None):
+    """
+    Generate TTS audio for a single turn.
+    Handles both accumulative (multi-para) and single-tag pipelines.
 
-        if para_tags:
-            # Get the dimension and value (should be only ONE per utterance)
-            dimension = next(iter(para_tags.keys()))
-            value = para_tags[dimension]
+    Args:
+        emo_alpha: Emotion reference strength (1.0 for "very_*" tags, 0.6 for normal)
+        emo_audio_cache: Cache for emotion reference audio (same tag reuses same audio)
 
-            # ─────────────────────────────────────────────────────────────────
-            # GENDER MODE: Switch speaker reference (no emotion reference)
-            # ─────────────────────────────────────────────────────────────────
-            if dimension == "gender":
-                logging.info(f"  ═══ GENDER MODE ═══")
-                logging.info(f"  -> Gender tag detected: {value}")
+    Returns:
+        Audio tensor (channels, samples)
+    """
+    temp_output = f"/tmp/indextts_turn_{random.randint(0, 999999)}.wav"
 
-                # Map gender values to directory names
-                gender_dir_map = {
-                    "man": "male",
-                    "male": "male",
-                    "woman": "female",
-                    "female": "female"
-                }
-                target_gender_dir = gender_dir_map.get(value.lower())
+    try:
+        # Branch based on pipeline type
+        if use_accumulative and para_tags and len(para_tags) > 1:
+            # Multi-para accumulative pipeline
+            logging.info(f"  -> Using ACCUMULATIVE pipeline for {len(para_tags)} tags")
+            wav = _apply_accumulative_tts(
+                text=clean_text,
+                para_tags=para_tags,
+                tts_model=tts_model,
+                initial_spk_audio=spk_audio,
+                emotion_audio_pool_dir=emotion_audio_pool_dir,
+                speaker_gender=spk_gender,
+                sample_rate=sample_rate,
+                emo_audio_cache=emo_audio_cache
+            )
+        else:
+            # Single-tag TTS
+            wav = _infer_single_tag_tts(
+                tts_model, clean_text, spk_audio, emo_audio_prompt, emo_alpha,
+                temp_output, para_tags, sample_rate
+            )
 
-                # Check if we need to switch (only if different from current gender)
-                if target_gender_dir and target_gender_dir != spk_gender:
-                    logging.info(f"  -> Current gender: {spk_gender}, Target gender: {target_gender_dir}")
-                    logging.info(f"  -> Gender is DIFFERENT - switching to {value} voice")
+        # Ensure mono
+        if wav.shape[0] > 1:
+            wav = wav[0:1, :]
 
-                    # Sample a new speaker from the target gender directory
-                    gender_dir = Path(spk_audio_dir) / target_gender_dir
-                    gender_audio_files = list(gender_dir.glob("*.wav"))
+        return wav
 
-                    if gender_audio_files:
-                        # Randomly select a speaker from the target gender
-                        new_spk_audio = str(random.choice(gender_audio_files))
-                        logging.info(f"  -> ✓ Selected new speaker: {Path(new_spk_audio).name}")
+    except Exception as e:
+        logging.error(f"Error generating audio: {e}")
+        # Return silence as fallback
+        return torch.zeros(1, sample_rate)
+    finally:
+        # Cleanup temp file
+        if os.path.exists(temp_output):
+            os.remove(temp_output)
 
-                        # Update current speaker audio and gender
-                        spk_audio = new_spk_audio
-                        spk_gender = target_gender_dir  # "male" or "female"
 
-                        # Update tracking variables for this role
-                        if is_user:
-                            current_spk_A_audio = new_spk_audio
-                            current_spk_A_gender = spk_gender
-                        else:
-                            current_spk_B_audio = new_spk_audio
-                            current_spk_B_gender = spk_gender
+def _infer_single_tag_tts(tts_model, clean_text, spk_audio, emo_audio_prompt, emo_alpha,
+                          temp_output, para_tags, sample_rate):
+    """
+    Run single-tag TTS inference with optional emotion reference and post-processing.
 
-                        logging.info(f"  -> ✓ Speaker reference updated for {role}")
-                    else:
-                        logging.warning(f"  -> ❌ No audio files found in {gender_dir}")
-                elif target_gender_dir == spk_gender:
-                    # Gender is the same - no need to switch
-                    logging.info(f"  -> Current gender is already {spk_gender} - NO SWITCH NEEDED")
-                else:
-                    logging.warning(f"  -> ❌ Unknown gender value: {value}")
+    Args:
+        emo_alpha: Emotion reference strength (1.0 for "very_*" tags, 0.6 for normal)
 
-                # Do NOT use emotion reference audio in gender mode
-                emo_audio_prompt = None
+    Returns:
+        Audio tensor (channels, samples)
+    """
+    # Build inference kwargs
+    infer_kwargs = {
+        "spk_audio_prompt": spk_audio,
+        "text": clean_text,
+        "output_path": temp_output,
+        "use_random": False,
+        "verbose": False
+    }
 
-                # Clear para tag tracking when gender changes (since gender mode doesn't use emotion ref)
-                if is_user:
-                    last_spk_A_para_tag = None
-                    last_spk_A_emo_audio = None
-                else:
-                    last_spk_B_para_tag = None
-                    last_spk_B_emo_audio = None
+    # Add emotion reference if available
+    if emo_audio_prompt is not None:
+        infer_kwargs["emo_audio_prompt"] = emo_audio_prompt
+        infer_kwargs["emo_alpha"] = emo_alpha
+        logging.info(f"  -> 🎵 Using emotion reference: {Path(emo_audio_prompt).name} (alpha={emo_alpha})")
 
-            # ─────────────────────────────────────────────────────────────────
-            # PITCH MODE: Use gender-aware emotion reference
-            # ─────────────────────────────────────────────────────────────────
-            elif dimension == "pitch":
-                logging.info(f"  ═══ PITCH MODE ═══")
+    # Run inference
+    tts_model.infer(**infer_kwargs)
 
-                # Check if para tag is the same as last time (to avoid redundant resampling)
-                current_para_tag = (dimension, value)
-                if last_para_tag == current_para_tag and last_emo_audio:
-                    # Same para tag - REUSE the same emotion reference audio
-                    emo_audio_prompt = last_emo_audio
-                    logging.info(f"  -> Para tag unchanged ({dimension}={value}) - REUSING emotion reference")
-                    logging.info(f"  -> ✓ Reusing: {Path(emo_audio_prompt).name}")
-                else:
-                    # Different para tag - resample new emotion reference audio
-                    if emotion_audio_pool_dir:
-                        # Pass speaker gender to get_emotion_reference_audio
-                        emo_audio_prompt = get_emotion_reference_audio(
-                            para_tags, emotion_audio_pool_dir, speaker_gender=spk_gender
-                        )
-                        if emo_audio_prompt:
-                            logging.info(f"  -> ✓ Will apply {dimension}={value} using gender-aware emotion reference")
-                            # Update tracking for this role
-                            if is_user:
-                                last_spk_A_para_tag = current_para_tag
-                                last_spk_A_emo_audio = emo_audio_prompt
-                            else:
-                                last_spk_B_para_tag = current_para_tag
-                                last_spk_B_emo_audio = emo_audio_prompt
-                        else:
-                            logging.warning(f"  -> ❌ Could not find audio for {dimension}:{value}, using default voice")
-                    else:
-                        logging.warning(f"  -> ⚠️  emotion_audio_pool_dir not set, skipping {dimension}:{value}")
+    # Load generated audio
+    wav, sr = torchaudio.load(temp_output)
 
-            # ─────────────────────────────────────────────────────────────────
-            # OTHER MODES: Use emotion reference audio (emotion, speed, volume, age)
-            # ─────────────────────────────────────────────────────────────────
-            else:
-                logging.info(f"  ═══ EMOTION REFERENCE AUDIO MODE ═══")
+    # Resample if necessary
+    if sr != sample_rate:
+        wav = torchaudio.functional.resample(wav, sr, sample_rate)
 
-                # Check if para tag is the same as last time (to avoid redundant resampling)
-                current_para_tag = (dimension, value)
-                if last_para_tag == current_para_tag and last_emo_audio:
-                    # Same para tag - REUSE the same emotion reference audio
-                    emo_audio_prompt = last_emo_audio
-                    logging.info(f"  -> Para tag unchanged ({dimension}={value}) - REUSING emotion reference")
-                    logging.info(f"  -> ✓ Reusing: {Path(emo_audio_prompt).name}")
-                else:
-                    # Different para tag - resample new emotion reference audio
-                    if emotion_audio_pool_dir:
-                        emo_audio_prompt = get_emotion_reference_audio(para_tags, emotion_audio_pool_dir)
-                        if emo_audio_prompt:
-                            logging.info(f"  -> ✓ Will apply {dimension}={value} using emotion reference audio")
-                            # Update tracking for this role
-                            if is_user:
-                                last_spk_A_para_tag = current_para_tag
-                                last_spk_A_emo_audio = emo_audio_prompt
-                            else:
-                                last_spk_B_para_tag = current_para_tag
-                                last_spk_B_emo_audio = emo_audio_prompt
-                        else:
-                            logging.warning(f"  -> ❌ Could not find audio for {dimension}:{value}, using default voice")
-                    else:
-                        logging.info(f"  -> ⚠️  emotion_audio_pool_dir not set, skipping {dimension}:{value}")
+    # Ensure mono
+    if wav.shape[0] > 1:
+        wav = wav[0:1, :]
 
-        # Generate temporary output path for this turn
-        temp_output = f"/tmp/indextts_turn_{idx}.wav"
+    # Apply post-processing (speed, volume)
+    if para_tags:
+        wav = _apply_audio_post_processing(wav, sample_rate, para_tags)
+        logging.info(f"  -> ✓ Post-processing applied")
 
-        # Generate speech with IndexTTS2
-        try:
-            # ═══════════════════════════════════════════════════════════════════════
-            # TTS INFERENCE WITH EMOTION REFERENCE AUDIO
-            # ═══════════════════════════════════════════════════════════════════════
-            # Build inference kwargs
-            infer_kwargs = {
-                "spk_audio_prompt": spk_audio,  # Timbre prompt (speaker identity)
-                "text": clean_text,
-                "output_path": temp_output,
-                "use_random": False,
-                "verbose": False
-            }
+    return wav
 
-            # Add emotion reference audio if available
-            if emo_audio_prompt is not None:
-                # Try to use emotion reference audio parameter
-                # This assumes IndexTTS2 has a parameter for emotion reference audio
-                # You may need to adjust the parameter name based on actual IndexTTS2 API
-                try:
-                    infer_kwargs["emo_audio_prompt"] = emo_audio_prompt
-                    logging.info(f"  -> 🎵 Passing emotion reference to TTS model (emo_audio_prompt)")
-                except TypeError:
-                    # If parameter not supported, try alternative names
-                    logging.warning("  -> ⚠️  emo_audio_prompt parameter not supported, trying style_audio_prompt")
-                    try:
-                        infer_kwargs["style_audio_prompt"] = emo_audio_prompt
-                        logging.info(f"  -> 🎵 Passing emotion reference to TTS model (style_audio_prompt)")
-                    except TypeError:
-                        logging.error("  -> ❌ Emotion reference audio not supported by this IndexTTS2 version")
-                        # Fall back to using only speaker prompt
-                        pass
 
-            tts.infer(**infer_kwargs)
+def _combine_audio_segments(audio_segments, sample_rate):
+    """
+    Combine audio segments into stereo (User=left, Agent=right).
+    Handles normal concatenation and overlap.
 
-            # Load generated audio
-            wav, sr = torchaudio.load(temp_output)
-
-            # Resample if necessary
-            if sr != sample_rate:
-                wav = torchaudio.functional.resample(wav, sr, sample_rate)
-
-            # Ensure mono (take first channel if stereo)
-            if wav.shape[0] > 1:
-                wav = wav[0:1, :]
-
-            # ═══════════════════════════════════════════════════════════════════════
-            # POST-PROCESSING for volume (and other tags if needed)
-            # ═══════════════════════════════════════════════════════════════════════
-            # Volume requires BOTH emotion reference AND post-processing:
-            # - Emotion reference provides style/tone example to TTS model
-            # - Post-processing adjusts actual dB level via amplitude scaling
-            # ═══════════════════════════════════════════════════════════════════════
-            if para_tags:
-                try:
-                    wav = apply_audio_post_processing(wav, sample_rate, para_tags)
-                    logging.info(f"  -> ✓ Post-processing applied successfully")
-                except Exception as post_error:
-                    logging.error(f"  -> ❌ Post-processing failed: {post_error}")
-                    logging.error(f"     Error type: {type(post_error).__name__}")
-                    logging.error(f"     Keeping original audio without post-processing")
-                    # Keep original wav without post-processing instead of failing
-
-            # Store with role information for stereo placement
-            audio_segments.append((role, wav, spk_A_audio))
-
-            # Clean up temp file
-            if os.path.exists(temp_output):
-                os.remove(temp_output)
-
-        except Exception as e:
-            logging.error(f"Error generating audio for turn {idx}: {e}")
-            # Create silence as fallback
-            silence = torch.zeros(1, sample_rate)
-            audio_segments.append((role, silence, spk_A_audio))
-
-    # Combine audio segments into stereo (User=left, Agent=right)
+    Returns:
+        Stereo audio tensor (2, samples)
+    """
     l_ch = None
     r_ch = None
 
@@ -1278,7 +1781,7 @@ def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_au
                 l_ch = torch.zeros_like(wav)
         else:
             if is_overlap:
-                # Handle overlap - reduce previous audio and overlap
+                # Overlap - reduce previous audio
                 overlap_frame = int(random.uniform(0.6, 1.0) * sample_rate)
                 padded = torch.zeros(1, wav.shape[-1] - overlap_frame)
                 pause = torch.zeros(1, sample_rate // 4)
@@ -1304,9 +1807,103 @@ def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_au
                     l_ch = torch.cat([l_ch, pause, padded], -1)
 
     # Combine stereo channels
-    full_dialog = torch.cat([l_ch, r_ch], dim=0)
+    return torch.cat([l_ch, r_ch], dim=0)
 
-    # Save audio file
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MAIN TTS GENERATION FUNCTION - Refactored for clarity
+# ═══════════════════════════════════════════════════════════════════════════
+
+def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_audio_pool_dir=None, multi_para_mode=False):
+    """
+    Generate TTS audio using IndexTTS2 model with emotion reference audio.
+
+    REFACTORED VERSION - Much cleaner and more readable!
+
+    Architecture:
+        - Timbre Prompt (spk_audio_prompt): Controls speaker voice identity (stays constant)
+        - Style Prompt (emo_audio_prompt): Controls tone/style from reference audio
+
+    Modes:
+        - Multi-para: Multiple tags with accumulative pipeline
+        - Gender: Cross-gender style transfer via emotion reference (man_to_woman / woman_to_man)
+                  Speaker voice stays the same, only style changes
+        - Pitch: Gender-aware emotion reference
+        - Other: Emotion reference (emotion, speed, volume, age)
+
+    Args:
+        script: List of (role, text) tuples where text may contain (tags)
+        output: Path to save the output wav file
+        tts_model: Pre-initialized IndexTTS2 model instance
+        spk_audio_dir: Directory containing speaker reference audio files
+        emotion_audio_pool_dir: Directory containing emotion reference audio pool
+        multi_para_mode: If True, use accumulative pipeline for multiple para tags
+    """
+    sample_rate = 24000
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 1: Initialize speakers (handles gender mode pre-detection)
+    # ═══════════════════════════════════════════════════════════════════════════
+    spk_A_audio, spk_B_audio, spk_A_gender, spk_B_gender = _initialize_speakers(script, spk_audio_dir)
+
+    # Track current speakers (fixed throughout dialogue - gender changes via emotion reference)
+    current_speakers = {
+        "A_audio": spk_A_audio,
+        "B_audio": spk_B_audio,
+        "A_gender": spk_A_gender,
+        "B_gender": spk_B_gender
+    }
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # EMOTION AUDIO CACHE - Same tag reuses same audio within dialogue
+    # Key: (dimension, value), Value: (audio_path, emo_alpha)
+    # ═══════════════════════════════════════════════════════════════════════════
+    emo_audio_cache = {}
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 2: Process each dialogue turn
+    # ═══════════════════════════════════════════════════════════════════════════
+    audio_segments = []
+
+    for idx, (role, text) in enumerate(script, 1):
+        # 2.1 Determine speaker for this role
+        is_user = role in ("User", "[overlap] User")
+        spk_audio = current_speakers["A_audio"] if is_user else current_speakers["B_audio"]
+        spk_gender = current_speakers["A_gender"] if is_user else current_speakers["B_gender"]
+
+        # 2.2 Extract clean text and paralinguistic tags
+        clean_text, para_tags = extract_paralinguistic_tags(text)
+        if para_tags:
+            logging.info(f"Turn {idx} ({role}): Extracted tags {para_tags}")
+
+        # 2.3 Normalize tags (handle multi-para edge cases)
+        para_tags, use_accumulative = _normalize_para_tags(para_tags, multi_para_mode)
+
+        # 2.4 Get emotion reference audio (handles gender via cross-gender style transfer)
+        # Note: Speaker voice stays the same, gender is applied via emotion reference
+        # Uses cache: same tag reuses same audio file within dialogue
+        emo_audio_prompt, emo_alpha = _get_emotion_reference_audio(
+            para_tags, emotion_audio_pool_dir, speaker_gender=spk_gender, emo_audio_cache=emo_audio_cache
+        )
+
+        # 2.5 Generate audio for this turn
+        wav = _generate_tts_audio(
+            tts_model, clean_text, para_tags, spk_audio, spk_gender,
+            emo_audio_prompt, emo_alpha, use_accumulative, emotion_audio_pool_dir, sample_rate,
+            emo_audio_cache=emo_audio_cache
+        )
+
+        # 2.6 Store audio segment
+        audio_segments.append((role, wav, spk_A_audio))
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 3: Combine into stereo (User=left, Agent=right)
+    # ═══════════════════════════════════════════════════════════════════════════
+    full_dialog = _combine_audio_segments(audio_segments, sample_rate)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 4: Save audio file
+    # ═══════════════════════════════════════════════════════════════════════════
     torchaudio.save(str(output), full_dialog, sample_rate)
     logging.info(f"Saved TTS audio to: {output}")
 
@@ -1326,6 +1923,13 @@ def tts_batch(cfg):
     model_dir = cfg.tts.get("model_dir", "checkpoints")
     spk_audio_dir = cfg.tts.get("spk_audio_dir", "examples")
     emotion_audio_pool_dir = cfg.tts.get("emotion_audio_pool_dir", None)  # NEW: Emotion reference audio pool
+
+    # Multi-para mode configuration (from dialogue section)
+    multi_para_mode = cfg.dialogue.get("multi_para_mode", False)
+    if multi_para_mode:
+        logging.info("=" * 60)
+        logging.info("MULTI-PARA MODE ENABLED - Using accumulative TTS pipeline")
+        logging.info("=" * 60)
 
     # Create error log file
     error_log_path = wav_dir / "tts_errors.txt"
@@ -1408,7 +2012,8 @@ def tts_batch(cfg):
                 wav_file_path,
                 tts_model=tts_model,  # Pass pre-initialized model
                 spk_audio_dir=spk_audio_dir,
-                emotion_audio_pool_dir=emotion_audio_pool_dir  # Pass emotion audio pool
+                emotion_audio_pool_dir=emotion_audio_pool_dir,  # Pass emotion audio pool
+                multi_para_mode=multi_para_mode  # Pass multi-para mode flag from config
             )
 
         except Exception as e:
@@ -1482,10 +2087,6 @@ class Pipeline:
         if "dialogue" in st:
             print("Dialogue Generating (PARALINGUISTIC VERSION)...")
             generate_paralinguistic_dialogues(self.cfg)
-
-        if "analysis" in st:
-            print("Analyzing Paralinguistic Distribution...")
-            analyze_paralinguistic_distribution(self.cfg)
 
         if "tts" in st:
             print("Generating TTS Audio (IndexTTS2)...")
