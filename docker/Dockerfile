@@ -17,6 +17,9 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     sox \
     libsox-dev \
+    tmux \
+    nodejs \
+    npm \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -60,7 +63,10 @@ RUN pip install --no-cache-dir \
     soundfile==0.12.1 \
     pyworld==0.3.4 \
     openai-whisper==20250625 \
-    onnxruntime==1.24.1
+    onnxruntime==1.24.1 \
+    webrtcvad==2.0.10 \
+    websockets==12.0 \
+    opencc-python-reimplemented-0.1.7
 
 # Install deep learning frameworks
 RUN pip install --no-cache-dir \
