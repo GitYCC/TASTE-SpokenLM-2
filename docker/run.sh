@@ -26,7 +26,9 @@ docker run \
     --rm \
     --name "${CONTAINER_NAME}" \
     --shm-size=8g \
-    -v "${PROJECT_ROOT}:/workspace/TASTE-SpokenLM-2" \
+    -v /etc/passwd:/etc/passwd:ro \
+    -v /etc/group:/etc/group:ro \
+    -v ${PROJECT_ROOT}/../:/workspace \
     -v "${HOME}/.cache:/root/.cache" \
     -w /workspace/TASTE-SpokenLM-2 \
     "${IMAGE_NAME}" \
