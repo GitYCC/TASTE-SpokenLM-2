@@ -66,7 +66,7 @@ RUN pip install --no-cache-dir \
     onnxruntime==1.24.1 \
     webrtcvad==2.0.10 \
     websockets==12.0 \
-    opencc-python-reimplemented-0.1.7
+    opencc-python-reimplemented==0.1.7
 
 # Install deep learning frameworks
 RUN pip install --no-cache-dir \
