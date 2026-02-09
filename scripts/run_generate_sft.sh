@@ -6,13 +6,13 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Configuration
-MODEL_DIR="/workspace/models/TASTE2-8B-EN-SFT-new"
+MODEL_DIR="/mount/models/TASTE2-8B-EN-SFT-new"
 OUTPUT_DIR="./results/sft/test"
 ASR_MODEL="openai/whisper-large-v3"
 
 # Test files
 TEST_FILES=(
-    "/workspace/TASTE-Voice-Bot/tests_server/samples/whats-your-name.wav"
+    "/mount/TASTE-Voice-Bot/tests_server/samples/whats-your-name.wav"
     # "/mnt/shared/p01/dienruei/synthetic_data/val_syn_data"
     # "/home/chenwils/synthetic_data/tmp_parquet_output/dialogue_1_scenario40_16_turn_02_user.mp3"
     # "/mnt/shared/NTU_TASLM/yc/TASTE-SpokenLM/examples/orig/conditional/cond-gen_1188_133604_000062_000001_cond.wav"

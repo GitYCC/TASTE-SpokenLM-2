@@ -48,10 +48,8 @@ RUN conda activate ${VENV} && conda install -y -c conda-forge pynini==2.1.5
 RUN conda activate ${VENV} && cd CosyVoice && \
     pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host=mirrors.aliyun.com
 
-WORKDIR /workspace/CosyVoice
-
 # Install audio processing libraries
-RUN pip install --no-cache-dir \
+RUN conda activate ${VENV} && pip install --no-cache-dir \
     einx==0.3.0 \
     einops==0.8.1 \
     conformer==0.3.2 \
@@ -59,9 +57,12 @@ RUN pip install --no-cache-dir \
     soundfile==0.13.1 \
     pyworld==0.3.5 \
     openai-whisper==20250625 \
-    onnxruntime==1.24.1 \
     webrtcvad==2.0.10 \
     websockets==12.0 \
     opencc-python-reimplemented==0.1.7 \
     ruamel-yaml==0.18.14 \
     peft==0.18.1
+
+# Install the project
+COPY . /workspace/TASTE-SpokenLM-2/
+RUN conda activate ${VENV} && pip install /workspace/TASTE-SpokenLM-2

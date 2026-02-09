@@ -4,7 +4,7 @@ set -e
 # TASTE-SpokenLM-2 Docker Run Script
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+MOUNT_ROOT="$(dirname $(dirname $(dirname "$SCRIPT_DIR")))"
 IMAGE_NAME="taste-spokenlm-2-old:latest"
 CONTAINER_NAME="taste-spokenlm-2-old-dev"
 
@@ -28,8 +28,8 @@ docker run \
     --shm-size=8g \
     -p 8000:8000 \
     -p 3000:3000 \
-    -v ${PROJECT_ROOT}/../:/workspace \
+    -v ${MOUNT_ROOT}:/mount \
     -v "${HOME}/.cache:/root/.cache" \
-    -w /workspace/TASTE-SpokenLM-2 \
+    -w /mount/TASTE-Voice-Bot \
     "${IMAGE_NAME}" \
     tmux new-session -A -s main
