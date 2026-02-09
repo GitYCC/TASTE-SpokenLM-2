@@ -393,7 +393,7 @@ class TASTE2:
         }
         
     @torch.inference_mode()
-    def generation_stagesft(self, audio_16k, asr_model_dir=None, text=None, min_len=5, max_len=100, stop_id=None):
+    def generation_stagesft(self, audio_16k, asr_model_dir=None, text=None, min_len=1, max_len=100):
         """Generate stage 2 output"""
         if self.stage != 'sft':
             raise ValueError("generation_stagesft can only be called on stage sft model")
@@ -403,9 +403,7 @@ class TASTE2:
 
         data = self._sft_preprocess(audio_16k, asr_model_dir=asr_model_dir, text=text)
 
-        # Use im_end_token_id as stop signal for ChatML-formatted SFT models
-        if stop_id is None:
-            stop_id = self.model.slm.im_end_token_id
+        stop_id = self.frontend.tokenizer.encode("<|im_end|>", add_special_tokens=False)[0]
 
         slm_output_generator = self.model.slm.inference(
             **data,
