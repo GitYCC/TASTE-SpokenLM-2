@@ -2,7 +2,8 @@ FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
 ARG VENV_NAME="cosyvoice"
 ENV VENV=$VENV_NAME
-ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
 
 ENV DEBIAN_FRONTEN=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -26,7 +27,7 @@ RUN wget --quiet https://github.com/conda-forge/miniforge/releases/latest/downlo
     echo "conda activate ${VENV}" >> /opt/nvidia/entrypoint.d/110.conda_default_env.sh && \
     echo "conda activate ${VENV}" >> $HOME/.bashrc
 
-ENV PATH /opt/conda/bin:$PATH
+ENV PATH=/opt/conda/bin:$PATH
 
 RUN conda config --add channels conda-forge && \
     conda config --set channel_priority strict
@@ -36,7 +37,7 @@ RUN conda config --add channels conda-forge && \
 
 RUN conda create -y -n ${VENV} python=3.10
 ENV CONDA_DEFAULT_ENV=${VENV}
-ENV PATH /opt/conda/bin:/opt/conda/envs/${VENV}/bin:$PATH
+ENV PATH=/opt/conda/bin:/opt/conda/envs/${VENV}/bin:$PATH
 
 WORKDIR /workspace
 
@@ -66,3 +67,6 @@ RUN conda activate ${VENV} && pip install --no-cache-dir \
 # Install the project
 COPY . /workspace/TASTE-SpokenLM-2/
 RUN conda activate ${VENV} && pip install /workspace/TASTE-SpokenLM-2
+
+# Install Claude Code (run ~/.local/bin/claude to use claude code)
+RUN curl -fsSL https://claude.ai/install.sh | bash

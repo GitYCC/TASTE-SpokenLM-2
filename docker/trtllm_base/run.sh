@@ -8,20 +8,11 @@ MOUNT_ROOT="$(dirname $(dirname $(dirname "$SCRIPT_DIR")))"
 IMAGE_NAME="taste-spokenlm-2:latest"
 CONTAINER_NAME="taste-spokenlm-2-dev"
 
-# Check GPU availability
-if docker run --rm --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi &> /dev/null; then
-    GPU_FLAG="--gpus all"
-    echo "✓ GPU support enabled"
-else
-    GPU_FLAG=""
-    echo "⚠ GPU not available, running CPU-only"
-fi
-
 echo "Starting container: ${CONTAINER_NAME}"
 echo ""
 
 docker run \
-    ${GPU_FLAG} \
+    --gpus all \
     -it \
     --rm \
     --name "${CONTAINER_NAME}" \
@@ -32,4 +23,4 @@ docker run \
     -v "${HOME}/.cache:/root/.cache" \
     -w /mount/TASTE-Voice-Bot \
     "${IMAGE_NAME}" \
-    tmux new-session -A -s main
+    bash
