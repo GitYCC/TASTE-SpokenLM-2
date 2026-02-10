@@ -1,6 +1,6 @@
 FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
-ARG VENV_NAME="cosyvoice"
+ARG VENV_NAME="taste2"
 ENV VENV=$VENV_NAME
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
@@ -34,38 +34,21 @@ RUN conda config --add channels conda-forge && \
 # ------------------------------------------------------------------
 # ~conda
 # ==================================================================
-
 RUN conda create -y -n ${VENV} python=3.10
 ENV CONDA_DEFAULT_ENV=${VENV}
 ENV PATH=/opt/conda/bin:/opt/conda/envs/${VENV}/bin:$PATH
 
 WORKDIR /workspace
 
-ENV PYTHONPATH="${PYTHONPATH}:/workspace/CosyVoice:/workspace/CosyVoice/third_party/Matcha-TTS"
-
-RUN git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git
-
 RUN conda activate ${VENV} && conda install -y -c conda-forge pynini==2.1.5
-RUN conda activate ${VENV} && cd CosyVoice && \
-    pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host=mirrors.aliyun.com
-
-# Install audio processing libraries
-RUN conda activate ${VENV} && pip install --no-cache-dir \
-    einx==0.3.0 \
-    einops==0.8.1 \
-    conformer==0.3.2 \
-    librosa==0.11.0 \
-    soundfile==0.13.1 \
-    pyworld==0.3.5 \
-    openai-whisper==20250625 \
-    webrtcvad==2.0.10 \
-    websockets==12.0 \
-    opencc-python-reimplemented==0.1.7 \
-    ruamel-yaml==0.18.14 \
-    peft==0.18.1
 
 # Install the project
 COPY . /workspace/TASTE-SpokenLM-2/
+
+RUN conda activate ${VENV} && \
+    pip install -U "setuptools>=70,<71" && \
+    pip install -r /workspace/TASTE-SpokenLM-2/requirements.txt
+
 RUN conda activate ${VENV} && pip install /workspace/TASTE-SpokenLM-2
 
 # Install Claude Code (run ~/.local/bin/claude to use claude code)
