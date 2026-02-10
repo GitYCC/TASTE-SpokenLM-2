@@ -10,7 +10,7 @@ ENV PYTHONUNBUFFERED=1
 SHELL ["/bin/bash", "--login", "-c"]
 
 RUN apt-get update -y --fix-missing
-RUN apt-get install -y git build-essential curl wget ffmpeg unzip git git-lfs sox libsox-dev tmux nodejs npm && \
+RUN apt-get install -y git build-essential curl wget ffmpeg unzip git git-lfs sox libsox-dev tmux nodejs npm protobuf-compiler && \
     apt-get clean && \
     git lfs install
 
