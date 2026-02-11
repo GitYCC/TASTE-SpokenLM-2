@@ -47,7 +47,7 @@ COPY . /workspace/TASTE-SpokenLM-2/
 
 RUN conda activate ${VENV} && \
     pip install -U "setuptools>=70,<71" && \
-    pip install -r /workspace/TASTE-SpokenLM-2/requirements.txt
+    pip install -r /workspace/TASTE-SpokenLM-2/docker/cuda124/requirements.txt
 
 RUN conda activate ${VENV} && pip install /workspace/TASTE-SpokenLM-2
 
