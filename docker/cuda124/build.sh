@@ -5,7 +5,7 @@ set -e
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(dirname $(dirname $SCRIPT_DIR))"
-IMAGE_NAME="taste-spokenlm-2-old:latest"
+IMAGE_NAME="taste2-cu124:2.2.0"
 
 echo "Building Docker image: ${IMAGE_NAME}"
 echo "Project root: ${PROJECT_ROOT}"

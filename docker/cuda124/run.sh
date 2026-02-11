@@ -5,8 +5,8 @@ set -e
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 MOUNT_ROOT="$(dirname $(dirname $(dirname "$SCRIPT_DIR")))"
-IMAGE_NAME="taste-spokenlm-2-old:latest"
-CONTAINER_NAME="taste-spokenlm-2-old-dev"
+IMAGE_NAME="taste2-cu124:2.2.0"
+CONTAINER_NAME="taste2-cu124-dev"
 
 echo "Starting container: ${CONTAINER_NAME}"
 echo ""
