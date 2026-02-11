@@ -210,15 +210,21 @@ class TASTE2:
             taste_token_emb=taste_token_emb.to(self.device),
         )
 
-    def _sft_preprocess(self, audio_16k, text, role="user", asr_model_dir=None):
+    def _sft_preprocess(self, audio_16k, text, role="user", system_prompt="You are a helpful assistant.", asr_model_dir=None):
         """
         SFT preprocessing function that formats text with special tokens
         similar to format_and_concatenate_conversation function
+
+        Builds the full ChatML prompt:
+            <|im_start|>system\n{system_prompt}<|im_end|>
+            <|im_start|>user\n{text}<|im_end|>
+            <|im_start|>assistant\n
 
         Args:
             audio_16k: Input audio tensor
             text: Text string for the conversation turn
             role: Role ('system', 'user', 'assistant') for this turn
+            system_prompt: System prompt text
             asr_model_dir: Optional ASR model for fallback
 
         Returns:
@@ -230,8 +236,38 @@ class TASTE2:
         asr_text = text if text else self._run_asr(audio_16k, asr_model_dir)
         text_token, text_token_len = self.frontend._extract_text_token(asr_text)
 
-        # Format text with role tags using apply_template_on_message
-        formatted_text_token, formatted_text_token_len, token_message_ids = apply_template_on_message(self.frontend.tokenizer, role, asr_text)
+        tokenizer = self.frontend.tokenizer
+
+        # Build system message: <|im_start|>system\n{system_prompt}<|im_end|>
+        system_ids = (
+            tokenizer.encode("<|im_start|>", add_special_tokens=False) +
+            tokenizer.encode("system", add_special_tokens=False) +
+            tokenizer.encode("\n", add_special_tokens=False) +
+            tokenizer.encode(system_prompt, add_special_tokens=False) +
+            tokenizer.encode("<|im_end|>", add_special_tokens=False)
+        )
+        system_message_ids = [-1] * len(system_ids)  # all structural (no audio)
+
+        # Build user message: <|im_start|>user\n{text}<|im_end|>
+        formatted_text_token, formatted_text_token_len, token_message_ids = apply_template_on_message(tokenizer, role, asr_text)
+
+        # Build assistant prefix: <|im_start|>assistant\n
+        assistant_prefix_ids = (
+            tokenizer.encode("<|im_start|>", add_special_tokens=False) +
+            tokenizer.encode("assistant", add_special_tokens=False) +
+            tokenizer.encode("\n", add_special_tokens=False)
+        )
+        assistant_message_ids = [-1] * len(assistant_prefix_ids)  # structural
+
+        # Concatenate: system + user + assistant prefix
+        system_tensor = torch.tensor(system_ids, dtype=formatted_text_token.dtype).unsqueeze(0)
+        assistant_tensor = torch.tensor(assistant_prefix_ids, dtype=formatted_text_token.dtype).unsqueeze(0)
+        formatted_text_token = torch.cat([system_tensor, formatted_text_token, assistant_tensor], dim=1)
+        formatted_text_token_len = torch.tensor([formatted_text_token.shape[1]], dtype=torch.int32)
+        token_message_ids = system_message_ids + token_message_ids + assistant_message_ids
+
+        print(formatted_text_token)
+        print(token_message_ids)
 
         # Extract audio features similar to _preprocess
         audio_feature, audio_feature_len = self.audio_extractor(audio_16k, [audio_16k.shape[-1]])
@@ -258,6 +294,9 @@ class TASTE2:
         )
 
     def _postprocess(self, s3_tokens, audio_16k):
+        if s3_tokens.shape[1] == 0:
+            raise ValueError("No speech tokens generated - cannot synthesize audio. "
+                             "The model likely produced no meaningful content tokens.")
         # Convert tokens back to audio
         speaker_embedding = self.frontend._extract_spk_embedding(audio_16k)
         audio_chunks = list(self.model.tts(
@@ -354,7 +393,7 @@ class TASTE2:
         }
         
     @torch.inference_mode()
-    def generation_stagesft(self, audio_16k, asr_model_dir=None, text=None, min_len=5, max_len=100, stop_id=None):
+    def generation_stagesft(self, audio_16k, asr_model_dir=None, text=None, min_len=1, max_len=100):
         """Generate stage 2 output"""
         if self.stage != 'sft':
             raise ValueError("generation_stagesft can only be called on stage sft model")
@@ -363,6 +402,8 @@ class TASTE2:
         asr_text = text if text else self._run_asr(audio_16k, asr_model_dir)
 
         data = self._sft_preprocess(audio_16k, asr_model_dir=asr_model_dir, text=text)
+
+        stop_id = self.frontend.tokenizer.encode("<|im_end|>", add_special_tokens=False)[0]
 
         slm_output_generator = self.model.slm.inference(
             **data,

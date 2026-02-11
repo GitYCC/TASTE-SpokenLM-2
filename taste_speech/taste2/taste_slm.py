@@ -677,7 +677,7 @@ class TasteSLM(nn.Module):
         num_trials, max_trials = 0, 100
         while True:
             top_ids = self.text_sampling_callable(weighted_scores)
-            if (not ignore_eos) or (top_ids != stop_id):
+            if (not ignore_eos) or (top_ids.item() != stop_id):
                 break
             num_trials += 1
             if num_trials > max_trials:
@@ -732,7 +732,7 @@ class TasteSLM(nn.Module):
                 text_emb = self.slm.forward_embed_tokens(top_text_ids.unsqueeze(0)).float()
 
                 # stop sampling text
-                if top_text_ids == self.eos_token_id:
+                if top_text_ids in [self.eos_token_id, stop_id]:
                     break
 
                 # sampling taste

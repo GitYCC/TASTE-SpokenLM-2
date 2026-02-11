@@ -249,7 +249,7 @@ class Qwen2Encoder(torch.nn.Module):
 
             # Find and print all embedding layers
 
-            if lora_config['lora_mode'] == 'sft':
+            if lora_config.get('lora_mode') == 'sft':
                 # Standard LoRA for all embed_tokens
                 if 'embed_tokens' not in lora_target_modules:
                     lora_target_modules.append('embed_tokens')

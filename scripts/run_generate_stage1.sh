@@ -6,7 +6,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Configuration
-MODEL_DIR="/mnt/shared/NTU_TASLM/yc/models/TASTE2_8B_EN"
+MODEL_DIR="/mount/models/TASTE2-8B-EN"
 OUTPUT_DIR="./results/stage1/TASTE2_EN"
 
 # for en
