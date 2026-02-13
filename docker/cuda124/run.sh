@@ -19,6 +19,7 @@ docker run \
     --shm-size=8g \
     -p 8000:8000 \
     -p 3000:3000 \
+    -p 16686:16686 \
     -v ${MOUNT_ROOT}:/mount \
     -v "${HOME}/.cache:/root/.cache" \
     -w /mount/TASTE-Voice-Bot \
