@@ -307,12 +307,12 @@ def chat_completion(model_name: str, messages: List[Dict], **gen_kwargs) -> str:
 
 # ─────────────────────────────  SCENARIO GEN  ──────────────────────────────
 
-def generate_scenarios(cfg):
-    """Generate scenarios for dialogues"""
-    out_path = Path(cfg.scenario["out_file"])
+def generate_scenarios(cfg, topic):
+    """Generate scenarios for a single topic."""
+    out_path = Path(cfg.data_root) / "scenarios" / topic / "scenarios.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    system_prompt = cfg.scenario["prompt"].format(n=cfg.scenario["n"], topic=cfg.scenario["topic"])
+    system_prompt = cfg.scenario["prompt"].format(n=cfg.scenario["n"], topic=topic)
     msgs = [{"role": "system", "content": system_prompt}]
  
     text = chat_completion(
@@ -733,7 +733,7 @@ def _call_llm_with_retry(
     return None
 
 
-def generate_paralinguistic_dialogues(cfg):
+def generate_paralinguistic_dialogues(cfg, topic, mode):
     """
     PARALINGUISTIC VERSION: Generates dialogues with paralinguistic control tags.
 
@@ -750,8 +750,8 @@ def generate_paralinguistic_dialogues(cfg):
     4. Helper functions extract complex logic
     """
     # Read scenarios
-    scen_path = Path(cfg.scenario["out_file"]).with_suffix(".jsonl")
-    out_dir = Path(cfg.dialogue["out_dir"])
+    scen_path = Path(cfg.data_root) / "scenarios" / topic / "scenarios.jsonl"
+    out_dir = Path(cfg.data_root) / mode / topic / "dialogue_txt"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     scenarios = [json.loads(l) for l in scen_path.read_text(encoding="utf-8").splitlines()]
@@ -770,10 +770,16 @@ def generate_paralinguistic_dialogues(cfg):
     # Control mode configuration
     control_request_frequency_first = cfg.dialogue.get("control_request_frequency_first", 0.8)
     control_request_frequency_subsequent = cfg.dialogue.get("control_request_frequency_subsequent", 0.4)
-    control_dimension = cfg.dialogue.get("control_dimension", "speed")
+
+    # Derive multi_para_mode and control_dimension from the mode parameter
+    if mode == "multi":
+        multi_para_mode = True
+        control_dimension = cfg.dialogue.get("control_dimension", "speed")  # unused in multi mode
+    else:
+        multi_para_mode = False
+        control_dimension = mode  # e.g. "gender", "speed", "emotion", ...
 
     # Multi-para mode configuration
-    multi_para_mode = cfg.dialogue.get("multi_para_mode", False)
     multi_para_probability = cfg.dialogue.get("multi_para_probability", 0.7)
     max_para_tags = cfg.dialogue.get("max_para_tags", 3)
     multi_para_dimensions = cfg.dialogue.get("multi_para_dimensions", ["speed", "pitch", "emotion", "volume", "age"])
@@ -788,11 +794,8 @@ def generate_paralinguistic_dialogues(cfg):
     # Load paralinguistic pools from config
     paralinguistic_pools = cfg.get("paralinguistic_pools", {})
 
-    # Get topic for conversation_id
-    topic = cfg.scenario.get("topic", "unknown")
-
-    # Determine mode suffix for conversation_id
-    mode_suffix = "multi" if multi_para_mode else control_dimension
+    # mode_suffix matches mode param ("multi" or dimension name)
+    mode_suffix = mode
 
     logging.info(f"Generating PARALINGUISTIC dialogues:")
     logging.info(f"  Topic: {topic}")
@@ -2028,7 +2031,43 @@ def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_au
         return turn_metadata_list
     return None
 
-def tts_batch(cfg):
+def _init_tts_model(cfg):
+    """Initialize IndexTTS2 model once; pass the returned model into tts_batch."""
+    model_dir = cfg.tts.get("model_dir", "checkpoints")
+    cfg_path = os.path.join(model_dir, "config.yaml")
+
+    logging.info("Initializing IndexTTS2 model with optimizations...")
+    logging.info(f"PyTorch version: {torch.__version__}")
+    logging.info(f"CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        logging.info(f"CUDA version: {torch.version.cuda}")
+        logging.info(f"GPU count: {torch.cuda.device_count()}")
+        logging.info(f"Current GPU: {torch.cuda.current_device()}")
+        logging.info(f"GPU name: {torch.cuda.get_device_name(0)}")
+
+    if not torch.cuda.is_available():
+        logging.error("=" * 80)
+        logging.error("CUDA is NOT available! TTS will run on CPU (VERY SLOW)")
+        logging.error("Please install PyTorch with CUDA support:")
+        logging.error("  pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118")
+        logging.error("=" * 80)
+        raise RuntimeError("CUDA is required but not available. Please check your PyTorch installation.")
+
+    tts_model = IndexTTS2(
+        cfg_path=cfg_path,
+        model_dir=model_dir,
+        device="cuda",
+        use_fp16=True,
+        use_cuda_kernel=True,
+        use_accel=False,
+        use_torch_compile=False,
+        use_deepspeed=False
+    )
+    logging.info("IndexTTS2 model initialized successfully with all optimizations!")
+    return tts_model
+
+
+def tts_batch(cfg, topic, mode, tts_model):
     """
     Batch process dialogue text files to generate TTS audio using IndexTTS2.
     Processes files from dialogue output directory and extracts paralinguistic tags.
@@ -2036,17 +2075,16 @@ def tts_batch(cfg):
     - Emotion tags → Emotion vectors
     - Gender/Age tags → Emotion reference audio
     """
-    src_dir = Path(cfg.dialogue["out_dir"])
-    wav_dir = Path(cfg.tts["wav_dir"])
+    src_dir = Path(cfg.data_root) / mode / topic / "dialogue_txt"
+    wav_dir = Path(cfg.data_root) / mode / topic / "wav"
     wav_dir.mkdir(parents=True, exist_ok=True)
 
-    # IndexTTS2 model directory and speaker audio directory from config
-    model_dir = cfg.tts.get("model_dir", "checkpoints")
+    # Speaker audio directory and emotion audio pool from config
     spk_audio_dir = cfg.tts.get("spk_audio_dir", "examples")
-    emotion_audio_pool_dir = cfg.tts.get("emotion_audio_pool_dir", None)  # NEW: Emotion reference audio pool
+    emotion_audio_pool_dir = cfg.tts.get("emotion_audio_pool_dir", None)
 
-    # Multi-para mode configuration (from dialogue section)
-    multi_para_mode = cfg.dialogue.get("multi_para_mode", False)
+    # Multi-para mode derived from the mode parameter
+    multi_para_mode = (mode == "multi")
     if multi_para_mode:
         logging.info("=" * 60)
         logging.info("MULTI-PARA MODE ENABLED - Using accumulative TTS pipeline")
@@ -2067,42 +2105,7 @@ def tts_batch(cfg):
         logging.warning(f"No dialogue files found in {src_dir}")
         return
 
-    logging.info(f"Processing {len(dialogue_files)} dialogue files for TTS...")
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # INITIALIZE IndexTTS2 MODEL ONCE (REUSE FOR ALL FILES)
-    # ═══════════════════════════════════════════════════════════════════════════
-    logging.info("Initializing IndexTTS2 model with optimizations...")
-    cfg_path = os.path.join(model_dir, "config.yaml")
-
-    # Check CUDA availability before initialization
-    logging.info(f"PyTorch version: {torch.__version__}")
-    logging.info(f"CUDA available: {torch.cuda.is_available()}")
-    if torch.cuda.is_available():
-        logging.info(f"CUDA version: {torch.version.cuda}")
-        logging.info(f"GPU count: {torch.cuda.device_count()}")
-        logging.info(f"Current GPU: {torch.cuda.current_device()}")
-        logging.info(f"GPU name: {torch.cuda.get_device_name(0)}")
-
-    if not torch.cuda.is_available():
-        logging.error("=" * 80)
-        logging.error("CUDA is NOT available! TTS will run on CPU (VERY SLOW)")
-        logging.error("Please install PyTorch with CUDA support:")
-        logging.error("  pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118")
-        logging.error("=" * 80)
-        raise RuntimeError("CUDA is required but not available. Please check your PyTorch installation.")
-
-    tts_model = IndexTTS2(
-        cfg_path=cfg_path,
-        model_dir=model_dir,
-        device="cuda",  # FORCE GPU usage (will error if CUDA not available)
-        use_fp16=True,  # ENABLED: 2-3x faster inference with less VRAM
-        use_cuda_kernel=True,  # ENABLED: Faster BigVGAN vocoder with custom CUDA kernel
-        use_accel=False,  # DISABLED: Requires flash_attn (not installed)
-        use_torch_compile=False,  # DISABLED: Can cause compatibility issues
-        use_deepspeed=False  # DeepSpeed disabled (requires extra setup)
-    )
-    logging.info("IndexTTS2 model initialized successfully with all optimizations!")
+    logging.info(f"Processing {len(dialogue_files)} dialogue files for TTS [{mode}/{topic}]...")
 
     for txt_file in tqdm(dialogue_files, desc="TTS Generation"):
         dialogue_id = txt_file.stem
@@ -2207,27 +2210,42 @@ def export_to_huggingface(cfg):
     logging.info("=" * 80)
 
     # Get configuration
-    wav_dir = Path(cfg.tts["wav_dir"])
-    output_dir = Path(cfg.huggingface.get("output_dir", "data_para/huggingface_dataset"))
+    data_root = Path(cfg.data_root)
+    output_dir = data_root / "huggingface_dataset"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Find all dialogue folders in wav_dir
-    dialogue_folders = [d for d in wav_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
+    # Enumerate all (mode, topic) wav directories from config
+    topics = list(cfg.get("topics", []))
+    modes = list(cfg.get("dialogue_modes", []))
 
-    if not dialogue_folders:
-        logging.error(f"No dialogue folders found in {wav_dir}")
+    # Pre-load scenarios per topic
+    topic_scenarios = {}
+    for topic in topics:
+        scen_file = data_root / "scenarios" / topic / "scenarios.jsonl"
+        if scen_file.exists():
+            topic_scenarios[topic] = {}
+            for line in scen_file.read_text(encoding="utf-8").splitlines():
+                s = json.loads(line)
+                topic_scenarios[topic][s["id"]] = s
+
+    # Collect all (mode, topic, dialogue_folder, scenarios, wav_dir) tuples
+    all_dialogue_items = []
+    for mode in modes:
+        for topic in topics:
+            wav_dir = data_root / mode / topic / "wav"
+            if not wav_dir.exists():
+                continue
+            scenarios = topic_scenarios.get(topic, {})
+            for d in sorted(wav_dir.iterdir()):
+                if d.is_dir() and not d.name.startswith('.'):
+                    all_dialogue_items.append((mode, topic, d, scenarios, wav_dir))
+
+    if not all_dialogue_items:
+        logging.error(f"No dialogue folders found under {data_root}")
         logging.error("Please run the TTS stage first with HuggingFace export enabled")
         return
 
-    logging.info(f"Found {len(dialogue_folders)} dialogue folders")
-
-    # Get scenario info for topic
-    scenario_file = Path(cfg.scenario["out_file"]).with_suffix(".jsonl")
-    scenarios = {}
-    if scenario_file.exists():
-        for line in scenario_file.read_text(encoding="utf-8").splitlines():
-            scenario = json.loads(line)
-            scenarios[scenario["id"]] = scenario
+    logging.info(f"Found {len(all_dialogue_items)} dialogue folders across all modes/topics")
 
     # Get LLM names
     llm_user = cfg.dialogue.get("user_model", "unknown")
@@ -2236,7 +2254,7 @@ def export_to_huggingface(cfg):
     # Collect all dialogue data from metadata
     dataset_rows = []
 
-    for dialogue_folder in tqdm(dialogue_folders, desc="Building HuggingFace dataset"):
+    for mode, topic, dialogue_folder, scenarios, wav_dir in tqdm(all_dialogue_items, desc="Building HuggingFace dataset"):
         dialogue_id = dialogue_folder.name
 
         # Check for metadata file
@@ -2249,25 +2267,15 @@ def export_to_huggingface(cfg):
         with open(metadata_file, "r", encoding="utf-8") as f:
             turn_list = json.load(f)
 
-        # Parse new dialogue_id format: {topic}_{mode}_{scenario_idx}_{dialogue_idx}
-        # Example: "planning_gender_1_1"
+        # Parse dialogue_id: {topic}_{mode}_{scenario_idx}_{dialogue_idx}
+        # topic and mode already known from outer loop; just parse scenario/conversation ids
         parts = dialogue_id.split("_")
         if len(parts) >= 4:
-            topic = parts[0]
-            mode = parts[1]
             scenario_idx = parts[2]
-            dialogue_idx = parts[3]
-
-            # Build scenario_id to lookup scenario description
             scenario_id = f"scenario{scenario_idx}"
             scenario_description = scenarios.get(scenario_id, {}).get("description", None)
-
-            # Conversation ID format (without dialogue_idx): {topic}_{mode}_{scenario_idx}
             conversation_id = f"{topic}_{mode}_{scenario_idx}"
         else:
-            # Fallback for old format
-            topic = "unknown"
-            mode = "unknown"
             scenario_description = None
             conversation_id = dialogue_id
 
@@ -2295,10 +2303,11 @@ def export_to_huggingface(cfg):
             # Create dataset row from metadata
             row = {
                 "conversation_id": conversation_id,
+                "mode": mode,
                 "topic": topic,
                 "scenario": scenario_description,
                 "turn_index": turn_metadata["turn_idx"],
-                "audio_path": str(Path(turn_metadata["audio_path"]).relative_to(wav_dir)),
+                "audio_path": str(Path(turn_metadata["audio_path"]).relative_to(data_root)),
                 "LLM1": llm_user,
                 "LLM2": llm_agent,
                 "speaker": turn_metadata["speaker"],
@@ -2330,6 +2339,7 @@ def export_to_huggingface(cfg):
     # Users can cast to Audio later with: dataset = dataset.cast_column("audio", Audio())
     features = Features({
         "conversation_id": Value("string"),
+        "mode": Value("string"),
         "turn_index": Value("int32"),
         "audio_path": Value("string"),
         "topic": Value("string"),
@@ -2412,6 +2422,15 @@ class PipelineConfig:
     # device
     device: str = "cuda"
 
+    # root directory; all outputs go to data_root / mode / topic / ...
+    data_root: str = "data_para"
+
+    # topics to generate in one run
+    topics: List[str] = field(default_factory=list)
+
+    # dialogue modes: dimension names + "multi"
+    dialogue_modes: List[str] = field(default_factory=lambda: ["multi"])
+
     # stages to run
     stages: List[str] = field(default_factory=lambda: [
         "scenario", "dialogue", "analysis", "tts"])
@@ -2465,20 +2484,30 @@ class Pipeline:
 
     def run(self):
         st = set(self.cfg.stages)
+        data_root = Path(self.cfg.data_root)
+        topics = list(self.cfg.get("topics", []))
+        modes = list(self.cfg.get("dialogue_modes", []))
 
         if "scenario" in st:
-            print("Scenario Creating...")
-            generate_scenarios(self.cfg)
-            original_path = Path(self.cfg.scenario["out_file"])
-            convert_nested_json_to_jsonl(original_path, original_path.with_suffix(".jsonl"))
+            for topic in topics:
+                print(f"Generating scenarios: {topic}")
+                generate_scenarios(self.cfg, topic)
+                out_path = data_root / "scenarios" / topic / "scenarios.json"
+                convert_nested_json_to_jsonl(out_path, out_path.with_suffix(".jsonl"))
 
         if "dialogue" in st:
-            print("Dialogue Generating (PARALINGUISTIC VERSION)...")
-            generate_paralinguistic_dialogues(self.cfg)
+            for topic in topics:
+                for mode in modes:
+                    print(f"Generating dialogues: topic={topic}, mode={mode}")
+                    generate_paralinguistic_dialogues(self.cfg, topic, mode)
 
         if "tts" in st:
-            print("Generating TTS Audio (IndexTTS2)...")
-            tts_batch(self.cfg)
+            print("Initializing TTS model (once for all topics/modes)...")
+            tts_model = _init_tts_model(self.cfg)
+            for topic in topics:
+                for mode in modes:
+                    print(f"TTS: topic={topic}, mode={mode}")
+                    tts_batch(self.cfg, topic, mode, tts_model)
 
         if "huggingface" in st:
             print("Exporting to HuggingFace Dataset...")

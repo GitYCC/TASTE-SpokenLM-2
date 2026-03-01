@@ -18,8 +18,28 @@ hydra:
 
 device: cuda
 
+# ═══════════════════════════════════════════════════════════════════════════
+# DATA ROOT - single place to control where all outputs are saved
+# All paths derived as: {data_root}/{mode}/{topic}/...
+# ═══════════════════════════════════════════════════════════════════════════
+data_root: TEST_syn_data
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DIALOGUE MODES - each mode is run for every topic
+#   dimension name → single-control mode (one paralinguistic dimension)
+#   "multi"        → multi-para mode (multiple dimensions combined)
+# ═══════════════════════════════════════════════════════════════════════════
+dialogue_modes:
+  - speed
+  - pitch
+  - gender
+  - emotion
+  - volume
+  - age
+  - multi
+
 # Pipeline Stages
-stages: [scenario, dialogue, analysis, tts]  # Available: scenario, dialogue, analysis, tts
+stages: [scenario, dialogue]  # Available: scenario, dialogue, tts, huggingface
 
 # ═══════════════════════════════════════════════════════════════════════════
 # STAGE 1: SCENARIO GENERATION
@@ -27,28 +47,75 @@ stages: [scenario, dialogue, analysis, tts]  # Available: scenario, dialogue, an
 scenario:
   model: openai/gpt-4o-mini  # OpenRouter format: provider/model-name
   n: 2
-  out_file: data_para/scenarios.json
-
+  out_file: data_para/scenarios.json  # unused - paths now derived from data_root + topic
   prompt: |
-    Please create {n} diverse customer service scenarios in 5-6 sentences for one agent and one user without dialogue.
-    The scenarios should include realistic situations where users interact with support agents.
-    Examples: technical support, product inquiries, account issues, complaints, questions about services.
+    Create {n} diverse conversation scenarios focused on the topic of "{topic}".
 
-    Please make the output in the JSON format below:
+    Each scenario should describe a realistic situation where:
+    - A user (person seeking help/advice/information) has a question, problem, or need related to {topic}
+    - An agent (expert, assistant, or helper) will provide guidance, answer questions, or offer solutions
+
+    Write each scenario in 3-4 sentences. Describe the context and user's situation clearly, but DO NOT include any dialogue.
+
+    Make the scenarios varied and realistic, covering different aspects and situations within the {topic} domain.
+
+    Output in the following JSON format:
     {{
     "scenarios": [
       {{
         "scenario1": {{
-          "description": "A user contacts customer support because they forgot their password and can't access their account. They need to reset it quickly as they have an urgent task to complete."
+          "description": "Your scenario description here (3-4 sentences about a specific {topic}-related situation)"
         }}
       }},
       {{
         "scenario2": {{
-          "description": "A customer is inquiring about the shipping status of an order they placed two weeks ago. They are getting anxious because the delivery was supposed to arrive within 7-10 business days."
+          "description": "Your scenario description here (3-4 sentences about a different {topic}-related situation)"
         }}
       }}
     ]
     }}
+
+  
+
+topics:
+  - Planning
+  - Fitness
+  # - Mental-health
+  # - Business
+  # - Finance
+  # - Economics
+  # - Leadership
+  # - Career
+  # - Education
+  # - Communication
+  # - Technology
+  # - Software
+  # - Cybersecurity
+  # - Engineering
+  # - Astronomy
+  # - Environment
+  # - History
+  # - Politics
+  # - Philosophy
+  # - Culture
+  # - Art
+  # - Music
+  # - Literature
+  # - Photography
+  # - Fashion
+  # - Architecture
+  # - Travel
+  # - Parenting
+  # - Relationships
+  # - Sports
+  # - Gaming
+  # - Transportation
+  # - Logistics
+  # - Agriculture
+  # - Media
+  # - Philanthropy
+  # - Entertainment
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # STAGE 2: PARALINGUISTIC DIALOGUE GENERATION WITH CONTROL MODE
@@ -70,11 +137,6 @@ dialogue:
     5. You can use contractions, filler words (e.g., "yeah", "um", "I guess"), and casual phrasing.
     6. Output ONLY your utterance without any "User:" label or additional formatting.
 
-    Examples:
-    - Hi, I need help with my password reset.
-    - I'm still waiting for my order from two weeks ago. Can you check the status?
-    - That's great, thank you so much for your help!
-
   control_user_prompt: |
     You are acting as a User/Customer in a conversation with a support Agent.
 
@@ -87,15 +149,6 @@ dialogue:
     6. You can use contractions, filler words (e.g., "yeah", "um", "I guess"), and casual phrasing.
     7. Output ONLY your utterance without any "User:" label or additional formatting.
 
-    Examples (normal conversation):
-    - Hi, I need help with my password reset.
-    - I'm still waiting for my order from two weeks ago. Can you check the status?
-
-    Examples (with voice control):
-    - Can you speak a bit faster? I'm in a hurry.
-    - Could you sound calmer? It helps me feel less anxious.
-    - Please speak louder, I'm having trouble hearing you.
-
   # System Prompt for Agent (usual mode - NO tags)
   agent_prompt: |
     You are acting as a Customer Support Agent/Assistant in a conversation with a User.
@@ -105,11 +158,6 @@ dialogue:
     2. Keep responses under 20 seconds of speech (about 60 words maximum).
     3. Provide clear and accurate information in a natural, friendly way.
     4. Output ONLY your utterance without any tags, labels, or additional formatting.
-
-    Examples:
-    - Hello! I'd be happy to help you with that.
-    - Let me check your account details for you.
-    - I understand your concern. Let me look into this right away.
 
   control_agent_prompt: |
     You are acting as a Customer Support Agent/Assistant in a conversation with a User.
@@ -124,25 +172,48 @@ dialogue:
     7. The paralinguistic tag will be EXACTLY ONE dimension (gender OR age OR pitch OR speed OR volume OR emotion).
     8. Output format: (dimension:value) followed by your utterance.
 
-    Examples (acknowledging voice control with SINGLE dimension):
-    - (speed:fast) Sure! Let me help you quickly with that password reset.
-    - (emotion:calm) Of course, I'll speak more calmly. Now, let's look at your order status together.
-    - (volume:loud) Absolutely! I'll speak louder. Let me check your account details.
-    - (pitch:low) No problem, I'll use a lower pitch. How can I assist you today?
-
   # Generation Parameters
-  min_turns: 4
-  max_turns: 8
+  min_turns: 6
+  max_turns: 10
   per_scenario: 1  # Number of dialogues to generate per scenario
   out_dir: data_para/dialogue_multi_txt  # Match old version structure
 
   # Control Mode Configuration (Random switching within dialogue)
-  control_request_frequency: 0.8  # 50% chance that user makes a voice control request on each turn (after first turn)
+  control_request_frequency: 0.7  # 70% chance that i user makes a voice control request on each turn (after first turn)
 
   # Paralinguistic Dimension Selection (REQUIRED - must specify one)
   # Options: gender, age, pitch, speed, volume, emotion
   # This dimension will be used for ALL control requests in the generated dialogues
   control_dimension: gender  # Change this to use different dimension
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # MULTI-PARA MODE CONFIGURATION
+  # ───────────────────────────────────────────────────────────────────────────
+  # When enabled, LLM can select MULTIPLE paralinguistic dimensions per utterance
+  # BUT only ONE value per dimension (e.g., speed:fast AND pitch:high, NOT speed:fast AND speed:slow)
+  #
+  # TTS uses ACCUMULATIVE pipeline:
+  #   ref_speaker + para_audio_A → intermediate_A
+  #   intermediate_A + para_audio_B → final_audio
+  #   ...repeat for each para tag
+  multi_para_mode: true  # Set to true to enable multi-para mode
+
+  # Probability of adding each additional para tag (after the first one)
+  # E.g., if 0.5: 100% have 1 tag, 50% have 2 tags, 25% have 3 tags, etc.
+  multi_para_probability: 0.7
+
+  # Maximum number of para tags per utterance (to prevent too many cascading steps)
+  max_para_tags: 3
+
+  # Dimensions available for multi-para selection (subset of paralinguistic_pools)
+  # NOTE: gender should NOT be combined with others (changes speaker identity)
+  multi_para_dimensions:
+    - speed
+    - pitch
+    - gender
+    - emotion
+    - volume
+    - age
 
 # ═══════════════════════════════════════════════════════════════════════════
 # STAGE 3: PARALINGUISTIC ANALYSIS
@@ -157,48 +228,103 @@ dialogue:
 # These are randomly selected for agent utterances and used in control mode
 paralinguistic_pools:
   gender:
-    - man
-    - woman
-    - male
-    - female
+    - male    # Man voice (can switch to this)
+    - female  # Woman voice (can switch to this)
+    - normal  # No gender style transfer - use speaker reference only
 
   age:
     - child
     - old
+    - normal  # No age style - use speaker reference only
 
   pitch:
     - very_low
     - low
-    - normal
     - high
     - very_high
+    - normal  # No pitch modification - use speaker reference only
 
   speed:
+    - very_slow
     - slow
     - fast
+    - very_fast
+    - normal  # No speed modification - use speaker reference only
 
   volume:
+    - very_quiet
     - quiet
     - loud
+    - very_loud
+    - normal  # No volume modification - use speaker reference only
 
   emotion:
-    - happy
-    - angry
-    - sad
+    - normal  # No emotion style - use speaker reference only
     - afraid
-    - disgusted
-    - melancholic
-    - surprised
+    - amusement
+    - angry
+    - anxiety
     - calm
+    - compassion
+    - contentment
+    - cry
+    - disappointment
+    - disgusted
+    - envy
+    - excitement
+    - frustration
+    - gratitude
+    - grief
+    - guilt
+    - happy
+    - hope
+    - melancholic
+    - pride
+    - relief
+    - sad
+    - shame
+    - surprised
+    - sarcastic
+    - hysteria
+    - very afraid
+    - very amused
+    - very angry
+    - very anxiety
+    - very calm
+    - very compassion
+    - very contentment
+    - very cry
+    - very disappointment
+    - very disgusted
+    - very envy
+    - very excitement
+    - very frustration
+    - very gratitude
+    - very grief
+    - very guilt
+    - very happy
+    - very hope
+    - very melancholic
+    - very pride
+    - very relief
+    - very sad
+    - very shame
+    - very surprised
+    - very sarcastic
+    - very hysteria
+
+  
 
 # ═══════════════════════════════════════════════════════════════════════════
 # STAGE 4: TTS GENERATION (IndexTTS2 with DUAL-NODE PARALINGUISTIC CONTROL)
 # ═══════════════════════════════════════════════════════════════════════════
 tts:
-  wav_dir: data_para/tts_audio  # Output directory for generated audio files
+  model: IndexTTS2  # TTS model to use
   model_dir: index-tts/checkpoints  # Path to IndexTTS2 model checkpoints
-  spk_audio_dir: XTTS_reference  # Directory containing speaker reference audio files (with male/female/all subdirs)
+  spk_audio_dir: XTTS_reference  # Directory containing speaker reference audio files (with all/ subdir)
   emotion_audio_pool_dir: emo  # Emotion reference audio pool for ALL paralinguistic tags
+  load_dir: data_para  # Directory containing data folders with dialogue files
+  wav_dir: data_para/wav  # Output directory for generated audio files
 
   # ───────────────────────────────────────────────────────────────────────────
   # EMOTION REFERENCE AUDIO PARALINGUISTIC CONTROL
@@ -280,3 +406,16 @@ tts:
 # ═══════════════════════════════════════════════════════════════════════════
 # The LLM will generate diverse control requests based on paralinguistic_pools
 # No fixed templates - let LLM create natural variety!
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STAGE 5: HUGGINGFACE DATASET EXPORT
+# ═══════════════════════════════════════════════════════════════════════════
+# Export generated dialogues and audio to HuggingFace dataset format
+# Each row represents a single dialogue turn with metadata and audio
+huggingface:
+  enabled: true  # Set to false to disable HuggingFace dataset export
+  dataset_name: synthetic_paralinguistic_dialogues  # Name of the dataset
+  output_dir: data_para/huggingface_dataset  # Directory to save the dataset
+  push_to_hub: true  # Set to true to push dataset to HuggingFace Hub
+  hub_repo_id: wilzzzz/test_upload_3  # HuggingFace Hub repository ID (e.g., "username/dataset-name")
+  hub_private: false  # Whether to make the dataset private on Hub
