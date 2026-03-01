@@ -8,7 +8,7 @@ import logging
 import copy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from openai import OpenAI
@@ -72,7 +72,7 @@ def generate_paralinguistic_tag(
     mode: str = "single",
     multi_para_config: Dict = None,
     control_config: Dict = None,
-    last_tags: Dict[str, str] = None
+    category_history: Dict[str, str] = None
 ) -> Dict[str, str]:
     """
     Unified function for generating paralinguistic tags with different modes.
@@ -92,9 +92,8 @@ def generate_paralinguistic_tag(
             - max_tags: int (default 3) - maximum number of tags to generate
         control_config: Required for mode="control". Dict with:
             - fixed_dimension: str - the specific dimension to use
-            - current_value: Optional[str] - current value to exclude from selection
-        last_tags: Optional dict of last used tags {dimension: value} to exclude from selection
-                   Used in multi mode to ensure new tags are different from current ones
+        category_history: Optional dict of per-category last used values {dimension: value}
+                         Used across ALL modes for consecutive prevention to avoid immediate repetition
 
     Returns:
         Dictionary with paralinguistic tag(s)
@@ -112,7 +111,7 @@ def generate_paralinguistic_tag(
         # ─────────────────────────────────────────────────────────────
         # MULTI MODE: Pick multiple dimensions with probabilistic cascading
         # Used for multi-para control requests
-        # Excludes current values from last_tags to ensure change
+        # Excludes values from category_history to prevent consecutive repetition
         # ─────────────────────────────────────────────────────────────
         if not multi_para_config:
             raise ValueError("multi_para_config required for mode='multi'")
@@ -131,25 +130,25 @@ def generate_paralinguistic_tag(
         # Shuffle to randomize order
         random.shuffle(available_dims)
 
-        # Helper function to select value excluding current
-        def select_value_excluding_current(dim):
+        # Helper function to select value excluding from history (consecutive prevention)
+        def select_value_excluding_history(dim):
             available_values = list(pools[dim])
-            # Exclude current value if exists in last_tags
-            if last_tags and dim in last_tags:
-                current_val = last_tags[dim]
-                available_values = [v for v in available_values if v != current_val]
+            # Exclude value from category_history to prevent consecutive repetition
+            if category_history and dim in category_history:
+                history_val = category_history[dim]
+                available_values = [v for v in available_values if v != history_val]
                 if available_values:
-                    logging.info(f"    [MULTI-PARA] Excluding current '{current_val}' for {dim}")
+                    logging.info(f"    [CATEGORY-HISTORY] Excluding '{history_val}' for {dim} (consecutive prevention)")
                 else:
                     # All values filtered out, use full pool
                     available_values = list(pools[dim])
-                    logging.warning(f"    [MULTI-PARA] All values filtered for {dim}, using full pool")
+                    logging.warning(f"    [CATEGORY-HISTORY] All values filtered for {dim}, using full pool")
             return random.choice(available_values)
 
         # Start with one mandatory tag
         result = {}
         first_dim = available_dims[0]
-        result[first_dim] = select_value_excluding_current(first_dim)
+        result[first_dim] = select_value_excluding_history(first_dim)
         remaining_dims = available_dims[1:]
 
         # Probabilistically add more tags
@@ -157,7 +156,7 @@ def generate_paralinguistic_tag(
             if len(result) >= max_tags:
                 break
             if random.random() < add_probability:
-                result[dim] = select_value_excluding_current(dim)
+                result[dim] = select_value_excluding_history(dim)
             else:
                 # Once we fail the probability check, stop adding more
                 break
@@ -167,14 +166,14 @@ def generate_paralinguistic_tag(
 
     elif mode == "control":
         # ─────────────────────────────────────────────────────────────
-        # CONTROL MODE: Pick fixed dimension, excluding current value
+        # CONTROL MODE: Pick fixed dimension, excluding value from history
         # Used for single-para control requests (select_control_target logic)
+        # Uses category_history for consecutive prevention (same as multi mode)
         # ─────────────────────────────────────────────────────────────
         if not control_config:
             raise ValueError("control_config required for mode='control'")
 
         fixed_dimension = control_config.get("fixed_dimension")
-        current_value = control_config.get("current_value", None)
 
         if not fixed_dimension:
             raise ValueError("fixed_dimension required in control_config")
@@ -182,15 +181,16 @@ def generate_paralinguistic_tag(
         dimension = fixed_dimension
         available_values = list(pools[dimension])  # Make a copy
 
-        # Exclude current value if provided (can't request what you already have)
-        if current_value and current_value in available_values:
-            available_values = [v for v in available_values if v != current_value]
-            logging.info(f"    [SELECT_CONTROL] Excluding current value '{current_value}' from selection")
-
-        # If we filtered out all values, fall back to original pool (edge case)
-        if not available_values:
-            logging.warning(f"    [SELECT_CONTROL] All values filtered out, using full pool")
-            available_values = list(pools[dimension])
+        # Exclude value from category_history (consecutive prevention)
+        if category_history and dimension in category_history:
+            history_val = category_history[dimension]
+            available_values = [v for v in available_values if v != history_val]
+            if available_values:
+                logging.info(f"    [CATEGORY-HISTORY] Excluding '{history_val}' for {dimension} (consecutive prevention)")
+            else:
+                # All values filtered out, fall back to original pool (edge case)
+                logging.warning(f"    [CATEGORY-HISTORY] All values filtered out, using full pool")
+                available_values = list(pools[dimension])
 
         target_value = random.choice(available_values)
         return {dimension: target_value}
@@ -314,7 +314,7 @@ def generate_scenarios(cfg):
 
     system_prompt = cfg.scenario["prompt"].format(n=cfg.scenario["n"], topic=cfg.scenario["topic"])
     msgs = [{"role": "system", "content": system_prompt}]
-
+ 
     text = chat_completion(
         cfg.scenario["model"],
         msgs,
@@ -373,7 +373,7 @@ def _generate_control_para_tags(
     multi_para_mode: bool,
     multi_para_config: Dict,
     control_dimension: str,
-    last_para_tag: Optional[Dict[str, str]],
+    category_history: Optional[Dict[str, str]],
     paralinguistic_pools: Dict[str, List[str]]
 ) -> Dict[str, str]:
     """
@@ -383,34 +383,44 @@ def _generate_control_para_tags(
         multi_para_mode: Whether to use multi-para mode
         multi_para_config: Configuration for multi-para mode
         control_dimension: Fixed dimension for single-para mode
-        last_para_tag: Last emotion tags used by agent (full dict)
+        category_history: Per-category last used values {dimension: value}
         paralinguistic_pools: Available paralinguistic options
 
     Returns:
         Dictionary of para tags {dimension: value}
     """
     if multi_para_mode:
-        # Multi-para mode: generate multiple tags, excluding current values
-        return generate_paralinguistic_tag(
+        # Multi-para mode: generate multiple NEW tags, then preserve unchanged dimensions
+        new_tags = generate_paralinguistic_tag(
             pools=paralinguistic_pools,
             mode="multi",
             multi_para_config=multi_para_config,
-            last_tags=last_para_tag  # Exclude current values to ensure change
+            category_history=category_history  # Use history for consecutive prevention
         )
-    else:
-        # Single-para mode: generate one tag, excluding current value
-        current_value_to_exclude = None
-        if last_para_tag and control_dimension in last_para_tag:
-            # Extract the current value for this dimension from the dict
-            current_value_to_exclude = last_para_tag[control_dimension]
 
+        # PRESERVE unchanged dimensions from category_history
+        if category_history:
+            preserved_tags = {}
+            for dim, value in category_history.items():
+                if dim not in new_tags:  # Dimension not being changed
+                    preserved_tags[dim] = value
+                    logging.info(f"    [PRESERVE] Keeping {dim}:{value} from history (unchanged)")
+
+            # Merge: preserved_tags first, then new_tags overwrite
+            result = {**preserved_tags, **new_tags}
+            logging.info(f"    [MULTI-PARA RESULT] Final tags after preservation: {result}")
+            return result
+
+        return new_tags
+    else:
+        # Single-para mode: generate one tag using category_history for consecutive prevention
         return generate_paralinguistic_tag(
             pools=paralinguistic_pools,
             mode="control",
             control_config={
-                "fixed_dimension": control_dimension,
-                "current_value": current_value_to_exclude
-            }
+                "fixed_dimension": control_dimension
+            },
+            category_history=category_history  # Use history for consecutive prevention
         )
 
 
@@ -421,7 +431,7 @@ def _build_user_instruction(
     context_info: str,
     conversation_history: List[str],
     multi_para_mode: bool,
-    last_para_tag: Optional[Dict[str, str]] = None
+    category_history: Optional[Dict[str, str]] = None
 ) -> str:
     """
     Build instruction prompt for user LLM.
@@ -433,7 +443,7 @@ def _build_user_instruction(
         context_info: Scenario context
         conversation_history: Previous conversation turns
         multi_para_mode: Whether multi-para mode is enabled
-        last_para_tag: The agent's CURRENT para tags (so LLM knows what to change FROM)
+        category_history: The agent's CURRENT para tags (so LLM knows what to change FROM)
 
     Returns:
         Instruction string for user LLM
@@ -493,8 +503,8 @@ def _build_user_instruction(
 
             # Build current state info for LLM context
             current_state_info = ""
-            if last_para_tag:
-                current_tags_str = ", ".join([f"{k}='{v}'" for k, v in last_para_tag.items()])
+            if category_history:
+                current_tags_str = ", ".join([f"{k}='{v}'" for k, v in category_history.items()])
                 current_state_info = f"The agent is currently speaking with: {current_tags_str}\n"
 
             return (
@@ -514,8 +524,8 @@ def _build_user_instruction(
 
             # Build current state info so LLM knows what to change FROM
             current_state_info = ""
-            if last_para_tag and ctrl_dim in last_para_tag:
-                current_val = last_para_tag[ctrl_dim]
+            if category_history and ctrl_dim in category_history:
+                current_val = category_history[ctrl_dim]
                 current_state_info = f"The agent is currently speaking with {ctrl_dim}='{current_val}'.\n"
 
             return (
@@ -542,7 +552,7 @@ def _build_user_instruction(
 def _build_agent_instruction_and_tags(
     is_control_mode: bool,
     control_para_tags: Optional[Dict[str, str]],
-    last_para_tag: Optional[Dict[str, str]],
+    category_history: Optional[Dict[str, str]],
     context_info: str,
     conversation_history: List[str],
     multi_para_mode: bool,
@@ -554,7 +564,7 @@ def _build_agent_instruction_and_tags(
     Args:
         is_control_mode: Whether this is a control mode turn
         control_para_tags: Para tags requested by user
-        last_para_tag: Last emotion tags used by agent (full dict)
+        category_history: Last emotion tags used by agent (full dict)
         context_info: Scenario context
         conversation_history: Previous conversation turns
         multi_para_mode: Whether multi-para mode is enabled
@@ -610,9 +620,9 @@ def _build_agent_instruction_and_tags(
 
         return agent_instruction, para_tags, True  # Use control prompt
 
-    elif last_para_tag:
+    elif category_history:
         # Normal mode with emotion continuity - maintain ALL previous tags
-        para_tags = last_para_tag.copy()
+        para_tags = category_history.copy()
 
         # Format tags for display
         if len(para_tags) > 1:
@@ -764,7 +774,7 @@ def generate_paralinguistic_dialogues(cfg):
 
     # Multi-para mode configuration
     multi_para_mode = cfg.dialogue.get("multi_para_mode", False)
-    multi_para_probability = cfg.dialogue.get("multi_para_probability", 0.5)
+    multi_para_probability = cfg.dialogue.get("multi_para_probability", 0.7)
     max_para_tags = cfg.dialogue.get("max_para_tags", 3)
     multi_para_dimensions = cfg.dialogue.get("multi_para_dimensions", ["speed", "pitch", "emotion", "volume", "age"])
 
@@ -778,7 +788,15 @@ def generate_paralinguistic_dialogues(cfg):
     # Load paralinguistic pools from config
     paralinguistic_pools = cfg.get("paralinguistic_pools", {})
 
+    # Get topic for conversation_id
+    topic = cfg.scenario.get("topic", "unknown")
+
+    # Determine mode suffix for conversation_id
+    mode_suffix = "multi" if multi_para_mode else control_dimension
+
     logging.info(f"Generating PARALINGUISTIC dialogues:")
+    logging.info(f"  Topic: {topic}")
+    logging.info(f"  Mode: {mode_suffix}")
     logging.info(f"  User Model: {user_model}")
     logging.info(f"  Agent Model: {agent_model}")
     logging.info(f"  Turn Range: {min_turns}-{max_turns}")
@@ -796,6 +814,9 @@ def generate_paralinguistic_dialogues(cfg):
     for scenario in tqdm(scenarios, desc="dialogues"):
         scenario_desc = json.dumps(scenario, ensure_ascii=False)
 
+        # Extract scenario index from scenario['id'] (e.g., "scenario1" -> "1")
+        scenario_idx = scenario['id'].replace('scenario', '')
+
         for dialogue_idx in range(dialogues_per_scenario):
             dialogue_turns = []
             conversation_history = []
@@ -803,8 +824,10 @@ def generate_paralinguistic_dialogues(cfg):
             # Track if dialogue has had any control request yet
             has_had_control_request = False
 
-            # Track last para tag for agent (for continuity in normal mode AND for LLM to know current state)
-            last_para_tag = None  # Format: Dict[str, str] - full para tags dict
+            # Track per-category history for consecutive prevention and tag preservation
+            # Stores the last value used for each paralinguistic dimension {dimension: value}
+            # Used for: (1) consecutive prevention, (2) tag preservation in multi-para, (3) emotion continuity
+            category_history = {}  # Format: Dict[str, str] - {dimension: last_value}
 
             # ═══════════════════════════════════════════════════════════════
             # RESTRICT GENDER POOL PER DIALOGUE
@@ -858,7 +881,7 @@ def generate_paralinguistic_dialogues(cfg):
                         multi_para_mode,
                         multi_para_config,
                         control_dimension,
-                        last_para_tag,
+                        category_history,
                         dialogue_paralinguistic_pools  # Use dialogue-specific pool
                     )
                     has_had_control_request = True
@@ -879,7 +902,7 @@ def generate_paralinguistic_dialogues(cfg):
                     context_info,
                     conversation_history,
                     multi_para_mode,
-                    last_para_tag=last_para_tag  # Pass current para tags so LLM knows what to change FROM
+                    category_history=category_history  # Pass current para tags so LLM knows what to change FROM
                 )
 
                 user_utterance = _call_llm_with_retry(
@@ -904,7 +927,7 @@ def generate_paralinguistic_dialogues(cfg):
                 agent_instruction, agent_para_tags, use_control_prompt = _build_agent_instruction_and_tags(
                     is_control_mode,
                     control_para_tags,
-                    last_para_tag,
+                    category_history,
                     context_info,
                     conversation_history,
                     multi_para_mode,
@@ -937,13 +960,13 @@ def generate_paralinguistic_dialogues(cfg):
                 # Extract tags and update tracking
                 clean_utterance, extracted_tags = extract_paralinguistic_tags(agent_utterance)
 
-                # IMPORTANT: Only store emotion tags if we were EXPECTING them (agent_para_tags is not None)
-                # This prevents the LLM from accidentally initializing emotion before control mode happens
+                # IMPORTANT: Only store tags if we were EXPECTING them (agent_para_tags is not None)
+                # This prevents the LLM from accidentally initializing tags before control mode happens
                 if extracted_tags and agent_para_tags is not None:
-                    # Store ALL tags, not just the first one
-                    last_para_tag = extracted_tags.copy()
+                    # Update category history with ALL extracted tags (accumulative per-category tracking)
+                    category_history.update(extracted_tags)
                     tag_summary = ", ".join([f"{k}={v}" for k, v in extracted_tags.items()])
-                    logging.info(f"    [TRACKING] Agent tags updated: {tag_summary}")
+                    logging.info(f"    [CATEGORY-HISTORY UPDATE] Current history: {category_history}")
                 elif extracted_tags and agent_para_tags is None:
                     # LLM generated tags when it shouldn't have - log warning
                     logging.warning(f"    [WARNING] LLM generated unexpected tags {extracted_tags} - ignoring them")
@@ -953,7 +976,9 @@ def generate_paralinguistic_dialogues(cfg):
 
             # Save dialogue (tags embedded in parentheses)
             if dialogue_turns:
-                dialogue_id = f"{scenario['id']}_{dialogue_idx + 1}"
+                # New format: {topic}_{control_dimension or "multi"}_{scenario_idx}_{dialogue_idx}
+                # Note: dialogue_idx is needed for unique filenames
+                dialogue_id = f"{topic}_{mode_suffix}_{scenario_idx}_{dialogue_idx + 1}"
                 save_dialogue(out_dir, dialogue_id, dialogue_turns)
 
                 logging.info(f"Saved dialogue: {dialogue_id}")
@@ -1199,7 +1224,7 @@ def _get_emotion_reference_audio(para_tags, emotion_audio_pool_dir, speaker_gend
     - E.g., female speaker + (gender:male) → woman_to_man
     - Speaker voice identity stays the same, only style changes
 
-    Special handling for pitch mode:
+    Special handling for pitich mode:
     - Uses speaker_gender to select gender-appropriate pitch reference
     - E.g., "high" pitch + male speaker → high_pitch_man
     - E.g., "low" pitch + female speaker → low_pitch_woman
@@ -1424,7 +1449,7 @@ def _apply_accumulative_tts(
     speaker_gender: str = None,
     sample_rate: int = 24000,
     emo_audio_cache: Dict = None
-) -> torch.Tensor:
+) -> tuple:
     """
     Apply TTS with ACCUMULATIVE para tags pipeline.
 
@@ -1446,9 +1471,10 @@ def _apply_accumulative_tts(
         emotion_audio_pool_dir: Directory containing emotion reference audio pool
         speaker_gender: "male" or "female" (for pitch mode)
         sample_rate: Audio sample rate (default 24000)
+        emo_audio_cache: Cache for emotion reference audio
 
     Returns:
-        torch.Tensor: Final audio after all para tags applied
+        Tuple of (torch.Tensor, List[str]): Final audio and list of emotion reference paths used
     """
     if not para_tags:
         # No para tags - just do normal TTS
@@ -1465,7 +1491,7 @@ def _apply_accumulative_tts(
             wav = torchaudio.functional.resample(wav, sr, sample_rate)
         if os.path.exists(temp_output):
             os.remove(temp_output)
-        return wav
+        return wav, []
 
     # Convert to list for ordered iteration
     para_tag_list = list(para_tags.items())
@@ -1476,6 +1502,7 @@ def _apply_accumulative_tts(
 
     current_ref = initial_spk_audio
     temp_files = []
+    emotion_references = []  # Track all emotion references used
 
     for idx, (dimension, value) in enumerate(para_tag_list):
         is_last = (idx == num_tags - 1)
@@ -1493,6 +1520,9 @@ def _apply_accumulative_tts(
         if not emo_audio_prompt:
             logging.warning(f"  -> ❌ No emotion reference for {dimension}:{value}, skipping this tag")
             continue
+
+        # Track this emotion reference
+        emotion_references.append(str(emo_audio_prompt))
 
         # Generate audio with current reference + emotion reference
         temp_output = f"/tmp/accumulative_step_{idx}.wav"
@@ -1520,8 +1550,8 @@ def _apply_accumulative_tts(
             if sr != sample_rate:
                 wav = torchaudio.functional.resample(wav, sr, sample_rate)
 
-            # Apply post-processing if needed (e.g., volume adjustment)
-            wav = _apply_audio_post_processing(wav, sample_rate, single_tag)
+            # NOTE: Post-processing moved to the end (after all TTS steps)
+            # This prevents TTS from washing away signal modifications like speed/volume
 
             if not is_last:
                 # Not the last tag - save as intermediate and use as next reference
@@ -1558,8 +1588,17 @@ def _apply_accumulative_tts(
             except:
                 pass
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 2: Apply post-processing (speed, volume) AFTER all TTS
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Post-processing is applied ONCE at the end with ALL para_tags
+    # This prevents TTS from washing away signal modifications
+    logging.info(f"  ─── PHASE 2: POST-PROCESSING (all tags) ───")
+    wav = _apply_audio_post_processing(wav, sample_rate, para_tags)
+
     logging.info(f"  ═══ ACCUMULATIVE PIPELINE COMPLETE ═══")
-    return wav
+    logging.info(f"  -> Collected {len(emotion_references)} emotion references")
+    return wav, emotion_references
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1626,7 +1665,6 @@ def _initialize_speakers(script, spk_audio_dir):
 def _normalize_para_tags(para_tags, multi_para_mode):
     """
     Normalize paralinguistic tags and determine if accumulative pipeline should be used.
-    Handles edge case where multi-para includes gender (gender can't be combined).
 
     Returns:
         Tuple of (normalized_para_tags, use_accumulative)
@@ -1635,20 +1673,12 @@ def _normalize_para_tags(para_tags, multi_para_mode):
         return para_tags, False
 
     num_tags = len(para_tags)
-    has_gender_tag = "gender" in para_tags
 
-    # Multi-para mode with multiple tags
+    # Multi-para mode with multiple tags - use accumulative pipeline
     if multi_para_mode and num_tags > 1:
-        if has_gender_tag:
-            # Gender can't be combined - extract and use only gender
-            logging.warning(f"  -> Multi-para includes gender - using ONLY gender (can't combine)")
-            gender_value = para_tags["gender"]
-            return {"gender": gender_value}, False
-        else:
-            # Valid multi-para tags - use accumulative pipeline
-            logging.info(f"  ═══ MULTI-PARA ACCUMULATIVE MODE ({num_tags} tags) ═══")
-            logging.info(f"  -> Tags: {para_tags}")
-            return para_tags, True
+        logging.info(f"  ═══ MULTI-PARA ACCUMULATIVE MODE ({num_tags} tags) ═══")
+        logging.info(f"  -> Tags: {para_tags}")
+        return para_tags, True
 
     # Single tag or multi-para disabled
     return para_tags, False
@@ -1666,7 +1696,9 @@ def _generate_tts_audio(tts_model, clean_text, para_tags, spk_audio, spk_gender,
         emo_audio_cache: Cache for emotion reference audio (same tag reuses same audio)
 
     Returns:
-        Audio tensor (channels, samples)
+        Tuple of (Audio tensor, List of emotion reference paths)
+        - For single-tag mode: returns (wav, [single_emotion_ref] or [])
+        - For accumulative mode: returns (wav, [emotion_ref1, emotion_ref2, ...])
     """
     temp_output = f"/tmp/indextts_turn_{random.randint(0, 999999)}.wav"
 
@@ -1675,7 +1707,7 @@ def _generate_tts_audio(tts_model, clean_text, para_tags, spk_audio, spk_gender,
         if use_accumulative and para_tags and len(para_tags) > 1:
             # Multi-para accumulative pipeline
             logging.info(f"  -> Using ACCUMULATIVE pipeline for {len(para_tags)} tags")
-            wav = _apply_accumulative_tts(
+            wav, emotion_references = _apply_accumulative_tts(
                 text=clean_text,
                 para_tags=para_tags,
                 tts_model=tts_model,
@@ -1691,17 +1723,19 @@ def _generate_tts_audio(tts_model, clean_text, para_tags, spk_audio, spk_gender,
                 tts_model, clean_text, spk_audio, emo_audio_prompt, emo_alpha,
                 temp_output, para_tags, sample_rate
             )
+            # For single-tag mode, return single emotion reference as list
+            emotion_references = [str(emo_audio_prompt)] if emo_audio_prompt else []
 
         # Ensure mono
         if wav.shape[0] > 1:
             wav = wav[0:1, :]
 
-        return wav
+        return wav, emotion_references
 
     except Exception as e:
         logging.error(f"Error generating audio: {e}")
         # Return silence as fallback
-        return torch.zeros(1, sample_rate)
+        return torch.zeros(1, sample_rate), []
     finally:
         # Cleanup temp file
         if os.path.exists(temp_output):
@@ -1814,7 +1848,7 @@ def _combine_audio_segments(audio_segments, sample_rate):
 # MAIN TTS GENERATION FUNCTION - Refactored for clarity
 # ═══════════════════════════════════════════════════════════════════════════
 
-def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_audio_pool_dir=None, multi_para_mode=False):
+def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_audio_pool_dir=None, multi_para_mode=False, save_individual_turns=False, turn_output_dir=None):
     """
     Generate TTS audio using IndexTTS2 model with emotion reference audio.
 
@@ -1838,6 +1872,20 @@ def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_au
         spk_audio_dir: Directory containing speaker reference audio files
         emotion_audio_pool_dir: Directory containing emotion reference audio pool
         multi_para_mode: If True, use accumulative pipeline for multiple para tags
+        save_individual_turns: If True, save each turn as a separate mono audio file
+        turn_output_dir: Directory to save individual turn audio files (required if save_individual_turns=True)
+
+    Returns:
+        If save_individual_turns=True, returns a list of metadata dicts for each turn:
+        [{"turn_idx": int, "role": str, "text": str, "para_tags": dict, "audio_path": str,
+          "audio_start": float, "audio_end": float, "audio_duration": float,
+          "speaker_reference": str, "emotion_reference": list[str]}]
+
+        Note: emotion_reference is now a list of emotion reference audio paths:
+        - For single-tag mode: list with one path or empty list
+        - For multi-para mode: list with multiple paths (one per tag)
+
+        Otherwise returns None
     """
     sample_rate = 24000
 
@@ -1864,6 +1912,15 @@ def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_au
     # STEP 2: Process each dialogue turn
     # ═══════════════════════════════════════════════════════════════════════════
     audio_segments = []
+    turn_metadata_list = []  # For tracking metadata when save_individual_turns=True
+    current_time = 0.0  # Track cumulative time for metadata
+
+    # Create turn output directory if needed
+    if save_individual_turns:
+        if turn_output_dir is None:
+            raise ValueError("turn_output_dir must be specified when save_individual_turns=True")
+        turn_output_path = Path(turn_output_dir)
+        turn_output_path.mkdir(parents=True, exist_ok=True)
 
     for idx, (role, text) in enumerate(script, 1):
         # 2.1 Determine speaker for this role
@@ -1887,13 +1944,67 @@ def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_au
         )
 
         # 2.5 Generate audio for this turn
-        wav = _generate_tts_audio(
+        wav, emotion_references = _generate_tts_audio(
             tts_model, clean_text, para_tags, spk_audio, spk_gender,
             emo_audio_prompt, emo_alpha, use_accumulative, emotion_audio_pool_dir, sample_rate,
             emo_audio_cache=emo_audio_cache
         )
 
-        # 2.6 Store audio segment
+        # 2.6 Save individual turn audio if requested
+        if save_individual_turns:
+            # Calculate turn duration
+            turn_duration = wav.shape[1] / sample_rate
+            audio_start = current_time
+            audio_end = current_time + turn_duration
+            current_time = audio_end
+
+            # Save mono turn audio
+            # Simple filename: turn00.wav, turn01.wav, etc.
+            turn_audio_path = turn_output_path / f"turn{idx-1:02d}.wav"
+
+            # Convert to mono if stereo
+            if wav.shape[0] > 1:
+                wav_mono = wav.mean(dim=0, keepdim=True)
+            else:
+                wav_mono = wav
+
+            torchaudio.save(str(turn_audio_path), wav_mono, sample_rate)
+
+            # Store metadata
+            # Convert para_tags to structured format (all 6 dimensions)
+            para_tags_structured = {
+                "gender": None,
+                "age": None,
+                "pitch": None,
+                "speed": None,
+                "volume": None,
+                "emotion": None
+            }
+            if para_tags:
+                for dim, val in para_tags.items():
+                    para_tags_structured[dim] = val
+
+            # Store emotion references as list
+            # For multi-para mode: multiple references
+            # For single-tag mode: single reference as list (or empty list)
+            emotion_refs_list = emotion_references if emotion_references else []
+
+            turn_metadata = {
+                "turn_idx": idx - 1,  # 0-indexed
+                "role": role,
+                "speaker": "user" if is_user else "agent",
+                "text": clean_text,
+                "para_tags": para_tags_structured,
+                "audio_path": str(turn_audio_path),
+                "audio_start": audio_start,
+                "audio_end": audio_end,
+                "audio_duration": turn_duration,
+                "speaker_reference": str(spk_audio),
+                "emotion_reference": emotion_refs_list
+            }
+            turn_metadata_list.append(turn_metadata)
+
+        # 2.7 Store audio segment
         audio_segments.append((role, wav, spk_A_audio))
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -1906,6 +2017,16 @@ def IndexTTS_gen(script, output, tts_model, spk_audio_dir="examples", emotion_au
     # ═══════════════════════════════════════════════════════════════════════════
     torchaudio.save(str(output), full_dialog, sample_rate)
     logging.info(f"Saved TTS audio to: {output}")
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 5: Return metadata if individual turns were saved
+    # ═══════════════════════════════════════════════════════════════════════════
+    if save_individual_turns:
+        # Also save the full dialogue path in metadata
+        for metadata in turn_metadata_list:
+            metadata["full_dialogue_audio"] = str(output)
+        return turn_metadata_list
+    return None
 
 def tts_batch(cfg):
     """
@@ -1933,6 +2054,11 @@ def tts_batch(cfg):
 
     # Create error log file
     error_log_path = wav_dir / "tts_errors.txt"
+
+    # Check if HuggingFace export is enabled to decide whether to save individual turns
+    save_individual_turns = cfg.get("huggingface", {}).get("enabled", False)
+    if save_individual_turns:
+        logging.info("HuggingFace export enabled - saving individual turn audio files")
 
     # Get all dialogue text files
     dialogue_files = list(src_dir.glob("*.txt"))
@@ -1979,8 +2105,14 @@ def tts_batch(cfg):
     logging.info("IndexTTS2 model initialized successfully with all optimizations!")
 
     for txt_file in tqdm(dialogue_files, desc="TTS Generation"):
-        # Output wav file path
-        wav_file_path = wav_dir / f"{txt_file.stem}_IndexTTS.wav"
+        dialogue_id = txt_file.stem
+
+        # Create dialogue folder: wav_dir/dialogue_id/
+        dialogue_folder = wav_dir / dialogue_id
+        dialogue_folder.mkdir(parents=True, exist_ok=True)
+
+        # Output paths
+        wav_file_path = dialogue_folder / "full.wav"
 
         # Skip if already exists
         if wav_file_path.exists():
@@ -2007,14 +2139,32 @@ def tts_batch(cfg):
 
             # Generate TTS audio
             logging.info(f"Generating TTS for {txt_file.name}...")
-            IndexTTS_gen(
+
+            # Prepare turn output directory if saving individual turns
+            # Structure: wav_dir/dialogue_id/individual/
+            if save_individual_turns:
+                dialogue_turn_dir = dialogue_folder / "individual"
+                dialogue_turn_dir.mkdir(parents=True, exist_ok=True)
+            else:
+                dialogue_turn_dir = None
+
+            turn_metadata = IndexTTS_gen(
                 script,
                 wav_file_path,
                 tts_model=tts_model,  # Pass pre-initialized model
                 spk_audio_dir=spk_audio_dir,
                 emotion_audio_pool_dir=emotion_audio_pool_dir,  # Pass emotion audio pool
-                multi_para_mode=multi_para_mode  # Pass multi-para mode flag from config
+                multi_para_mode=multi_para_mode,  # Pass multi-para mode flag from config
+                save_individual_turns=save_individual_turns,
+                turn_output_dir=dialogue_turn_dir
             )
+
+            # Save metadata per dialogue if available
+            if save_individual_turns and turn_metadata:
+                metadata_file = dialogue_turn_dir / "turn_metadata.json"
+                with open(metadata_file, "w", encoding="utf-8") as f:
+                    json.dump(turn_metadata, f, indent=2, ensure_ascii=False)
+                logging.info(f"Saved turn metadata to: {metadata_file}")
 
         except Exception as e:
             # Log error and continue with next file
@@ -2026,6 +2176,234 @@ def tts_batch(cfg):
             continue
 
     logging.info(f"TTS batch processing complete. Audio files saved to: {wav_dir}")
+
+# ─────────────────────────────  HUGGINGFACE DATASET EXPORT  ──────────────────────────────
+
+def export_to_huggingface(cfg):
+    """
+    Export generated dialogues and audio to HuggingFace dataset format.
+    Each row represents a single dialogue turn with full metadata.
+
+    Audio organization:
+    - Each dialogue saved in its own folder
+    - Each turn as mono audio file
+    - Full dialogue as stereo audio file
+
+    This function reads the metadata generated during TTS processing.
+    """
+    try:
+        from datasets import Dataset, Features, Value, Sequence
+    except ImportError:
+        logging.error("HuggingFace datasets library not installed. Install with: pip install datasets")
+        return
+
+    # Check if HuggingFace export is enabled
+    if not cfg.get("huggingface", {}).get("enabled", False):
+        logging.info("HuggingFace dataset export disabled in config")
+        return
+
+    logging.info("=" * 80)
+    logging.info("EXPORTING TO HUGGINGFACE DATASET FORMAT")
+    logging.info("=" * 80)
+
+    # Get configuration
+    wav_dir = Path(cfg.tts["wav_dir"])
+    output_dir = Path(cfg.huggingface.get("output_dir", "data_para/huggingface_dataset"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Find all dialogue folders in wav_dir
+    dialogue_folders = [d for d in wav_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
+
+    if not dialogue_folders:
+        logging.error(f"No dialogue folders found in {wav_dir}")
+        logging.error("Please run the TTS stage first with HuggingFace export enabled")
+        return
+
+    logging.info(f"Found {len(dialogue_folders)} dialogue folders")
+
+    # Get scenario info for topic
+    scenario_file = Path(cfg.scenario["out_file"]).with_suffix(".jsonl")
+    scenarios = {}
+    if scenario_file.exists():
+        for line in scenario_file.read_text(encoding="utf-8").splitlines():
+            scenario = json.loads(line)
+            scenarios[scenario["id"]] = scenario
+
+    # Get LLM names
+    llm_user = cfg.dialogue.get("user_model", "unknown")
+    llm_agent = cfg.dialogue.get("agent_model", "unknown")
+
+    # Collect all dialogue data from metadata
+    dataset_rows = []
+
+    for dialogue_folder in tqdm(dialogue_folders, desc="Building HuggingFace dataset"):
+        dialogue_id = dialogue_folder.name
+
+        # Check for metadata file
+        metadata_file = dialogue_folder / "individual" / "turn_metadata.json"
+        if not metadata_file.exists():
+            logging.warning(f"No metadata file found for {dialogue_id}, skipping")
+            continue
+
+        # Load metadata for this dialogue
+        with open(metadata_file, "r", encoding="utf-8") as f:
+            turn_list = json.load(f)
+
+        # Parse new dialogue_id format: {topic}_{mode}_{scenario_idx}_{dialogue_idx}
+        # Example: "planning_gender_1_1"
+        parts = dialogue_id.split("_")
+        if len(parts) >= 4:
+            topic = parts[0]
+            mode = parts[1]
+            scenario_idx = parts[2]
+            dialogue_idx = parts[3]
+
+            # Build scenario_id to lookup scenario description
+            scenario_id = f"scenario{scenario_idx}"
+            scenario_description = scenarios.get(scenario_id, {}).get("description", None)
+
+            # Conversation ID format (without dialogue_idx): {topic}_{mode}_{scenario_idx}
+            conversation_id = f"{topic}_{mode}_{scenario_idx}"
+        else:
+            # Fallback for old format
+            topic = "unknown"
+            mode = "unknown"
+            scenario_description = None
+            conversation_id = dialogue_id
+
+        # Full dialogue audio path
+        full_dialogue_path = dialogue_folder / "full.wav"
+
+        # Process each turn using the metadata
+        for turn_metadata in turn_list:
+            # Flatten para_tags into individual fields
+            para_tags = turn_metadata["para_tags"]
+
+            # Handle emotion_reference - ensure it's always a list
+            emotion_ref_raw = turn_metadata.get("emotion_reference", None)
+            if emotion_ref_raw is None:
+                emotion_ref_list = []
+            elif isinstance(emotion_ref_raw, list):
+                # Already a list (new format)
+                emotion_ref_list = emotion_ref_raw
+            elif isinstance(emotion_ref_raw, str):
+                # Old format - single string, convert to list
+                emotion_ref_list = [emotion_ref_raw] if emotion_ref_raw else []
+            else:
+                emotion_ref_list = []
+
+            # Create dataset row from metadata
+            row = {
+                "conversation_id": conversation_id,
+                "topic": topic,
+                "scenario": scenario_description,
+                "turn_index": turn_metadata["turn_idx"],
+                "audio_path": str(Path(turn_metadata["audio_path"]).relative_to(wav_dir)),
+                "LLM1": llm_user,
+                "LLM2": llm_agent,
+                "speaker": turn_metadata["speaker"],
+                "text": turn_metadata["text"],
+                "paralinguistic_info": {
+                    "gender": para_tags.get("gender", None),
+                    "age": para_tags.get("age", None),
+                    "pitch": para_tags.get("pitch", None),
+                    "speed": para_tags.get("speed", None),
+                    "volume": para_tags.get("volume", None),
+                    "emotion": para_tags.get("emotion", None),
+                },
+                "audio": turn_metadata["audio_path"],
+                "reference": turn_metadata.get("speaker_reference", None),
+                "emotion_reference": emotion_ref_list,
+                "audio_start": turn_metadata["audio_start"],
+                "audio_end": turn_metadata["audio_end"],
+                "audio_duration": turn_metadata["audio_duration"],
+                "full_dialogue_audio": str(full_dialogue_path)
+            }
+
+            dataset_rows.append(row)
+
+    # Create HuggingFace dataset
+    logging.info(f"Creating HuggingFace dataset with {len(dataset_rows)} rows...")
+
+    # Define features schema
+    # Note: We store audio as string paths initially to avoid torchcodec dependency
+    # Users can cast to Audio later with: dataset = dataset.cast_column("audio", Audio())
+    features = Features({
+        "conversation_id": Value("string"),
+        "turn_index": Value("int32"),
+        "audio_path": Value("string"),
+        "topic": Value("string"),
+        "scenario": Value("string"),
+        "LLM1": Value("string"),
+        "LLM2": Value("string"),
+        "speaker": Value("string"),
+        "text": Value("string"),
+        "paralinguistic_info": {
+            "gender": Value("string"),
+            "age": Value("string"),
+            "pitch": Value("string"),
+            "speed": Value("string"),
+            "volume": Value("string"),
+            "emotion": Value("string"),
+        },
+        "audio": Value("string"),  # Store as string path, cast to Audio() later if needed
+        "reference": Value("string"),
+        "emotion_reference": Sequence(Value("string")),  # List of emotion reference paths (for multi-para mode)
+        "audio_start": Value("float32"),
+        "audio_end": Value("float32"),
+        "audio_duration": Value("float32"),
+        "full_dialogue_audio": Value("string")
+    })
+
+    # Create dataset
+    dataset = Dataset.from_list(dataset_rows, features=features)
+
+    # Optionally cast audio column to Audio feature if torchcodec is available
+    try:
+        from datasets import Audio as AudioFeature
+        dataset = dataset.cast_column("audio", AudioFeature(sampling_rate=24000))
+        logging.info("Successfully cast audio column to Audio feature type")
+    except ImportError:
+        logging.info("Audio stored as file paths. To load audio, install torchcodec and use: dataset.cast_column('audio', Audio())")
+    except Exception as e:
+        logging.warning(f"Could not cast audio column to Audio feature: {e}")
+        logging.info("Audio stored as file paths. You can manually cast later if needed.")
+
+    # Save dataset
+    dataset_save_path = output_dir / "dataset"
+    dataset.save_to_disk(str(dataset_save_path))
+    logging.info(f"Dataset saved to: {dataset_save_path}")
+
+    # Also save as JSON for easy inspection
+    json_path = output_dir / "dataset_metadata.json"
+    with open(json_path, "w", encoding="utf-8") as f:
+        # Remove audio binary data for JSON export
+        json_rows = []
+        for row in dataset_rows:
+            row_copy = row.copy()
+            row_copy["audio"] = str(row_copy["audio"])  # Convert to string path
+            json_rows.append(row_copy)
+        json.dump(json_rows, f, indent=2, ensure_ascii=False)
+    logging.info(f"Metadata saved to: {json_path}")
+
+    # Push to HuggingFace Hub if requested
+    if cfg.huggingface.get("push_to_hub", False):
+        hub_repo_id = cfg.huggingface.get("hub_repo_id")
+        if hub_repo_id:
+            logging.info(f"Pushing dataset to HuggingFace Hub: {hub_repo_id}")
+            dataset.push_to_hub(
+                hub_repo_id,
+                private=cfg.huggingface.get("hub_private", False)
+            )
+            logging.info("Dataset successfully pushed to HuggingFace Hub!")
+        else:
+            logging.warning("push_to_hub is True but hub_repo_id not specified")
+
+    logging.info("=" * 80)
+    logging.info("HUGGINGFACE DATASET EXPORT COMPLETE")
+    logging.info(f"Total turns exported: {len(dataset_rows)}")
+    logging.info(f"Dataset location: {dataset_save_path}")
+    logging.info("=" * 80)
 
 # ─────────────────────────────  ORCHESTRATOR  ──────────────────────────────
 
@@ -2070,6 +2448,16 @@ class PipelineConfig:
         "spk_audio_dir": "examples",
     })
 
+    # huggingface dataset export
+    huggingface: OmegaConf = OmegaConf.create({
+        "enabled": True,
+        "dataset_name": "synthetic_paralinguistic_dialogues",
+        "output_dir": "data_para/huggingface_dataset",
+        "push_to_hub": False,
+        "hub_repo_id": None,
+        "hub_private": False,
+    })
+
 class Pipeline:
     def __init__(self, cfg: PipelineConfig):
         self.cfg = cfg
@@ -2091,6 +2479,10 @@ class Pipeline:
         if "tts" in st:
             print("Generating TTS Audio (IndexTTS2)...")
             tts_batch(self.cfg)
+
+        if "huggingface" in st:
+            print("Exporting to HuggingFace Dataset...")
+            export_to_huggingface(self.cfg)
 
 # ─────────────────────────────  CLI ENTRY  ────────────────────────────────
 
