@@ -629,6 +629,7 @@ class TasteSLM(nn.Module):
         uuid: str = '',
         active_rule: Callable = None,
         stop_id: int = None,
+        quantize_input_latent: bool = True,
         **kwargs,
     ) -> Generator[Tuple[torch.Tensor, torch.Tensor], None, None]:
         assert text_token.size(0) == 1
@@ -652,7 +653,7 @@ class TasteSLM(nn.Module):
         lm_input = fused[:, :-1 * self.delay, :]  # truncate to text end
         reminding_taste_token_emb = taste_token_emb[:, -1 * self.delay:, :]
         # 5. step by step decode
-        for text_token, taste_emb in self.inference_wrapper(lm_input, reminding_taste_token_emb, max_len, min_len, uuid, active_rule=active_rule, stop_id=stop_id):
+        for text_token, taste_emb in self.inference_wrapper(lm_input, reminding_taste_token_emb, max_len, min_len, uuid, active_rule=active_rule, stop_id=stop_id, quantize_input_latent=quantize_input_latent):
             yield (text_token, taste_emb)
 
     def ban_tokens(self, logits: torch.Tensor) -> torch.Tensor:
@@ -685,7 +686,7 @@ class TasteSLM(nn.Module):
         return top_ids
 
     @torch.inference_mode()
-    def inference_wrapper(self, lm_input, reminding_taste_token_emb, max_len, min_len, uuid, active_rule=None, stop_id=None):
+    def inference_wrapper(self, lm_input, reminding_taste_token_emb, max_len, min_len, uuid, active_rule=None, stop_id=None, quantize_input_latent=True):
 
         # active_rule is a callable with signature: active_rule(text_logp, cache=None, device=None) -> (is_active, forced_next_tokens)
         # Returns:
@@ -740,30 +741,42 @@ class TasteSLM(nn.Module):
                     if self.use_continue:
                         z, _, _ = self.out_module.predict_taste_latent(hidden_pred.float())
                         taste_emb = self.taste_stage1.neck_proj_out(z)
+                        taste_emb_input = taste_emb
                     else:
                         z, _, _ = self.out_module.predict_taste_latent(hidden_pred.float())
                         vq_module = self.taste_stage1.taste_tokenizer.vq.rvq
                         taste_emb = vq_module.project_out(z)
+                        if quantize_input_latent:
+                            indices = vq_module.get_indices_from_code(z)
+                            taste_emb_input = vq_module.get_output_from_indices(indices)
+                        else:
+                            taste_emb_input = taste_emb
                     yield (text_out_tokens_queue.pop(0), taste_emb)
                 else:
-                    taste_emb = reminding_taste_token_emb[:, i, :].unsqueeze(1)
+                    taste_emb_input = reminding_taste_token_emb[:, i, :].unsqueeze(1)
 
                 text_out_tokens_queue.append(top_text_ids)
-                lm_input = self.fusing_module(text_emb, taste_emb, torch.tensor([1]), delay=0).reshape(1, 1, -1)
+                lm_input = self.fusing_module(text_emb, taste_emb_input, torch.tensor([1]), delay=0).reshape(1, 1, -1)
 
             # (reminding) sampling taste
             while len(text_out_tokens_queue) > 0:
                 if self.use_continue:
                     z, _, _ = self.out_module.predict_taste_latent(hidden_pred.float())
                     taste_emb = self.taste_stage1.neck_proj_out(z)
+                    taste_emb_input = taste_emb
                 else:
                     z, _, _ = self.out_module.predict_taste_latent(hidden_pred.float())
                     vq_module = self.taste_stage1.taste_tokenizer.vq.rvq
                     taste_emb = vq_module.project_out(z)
+                    if quantize_input_latent:
+                        indices = vq_module.get_indices_from_code(z)
+                        taste_emb_input = vq_module.get_output_from_indices(indices)
+                    else:
+                        taste_emb_input = taste_emb
                 yield (text_out_tokens_queue.pop(0), taste_emb)
 
                 text_emb = self.fusing_module.pad_text_embed.unsqueeze(0).unsqueeze(0)
-                lm_input = self.fusing_module(text_emb, taste_emb, torch.tensor([1]), delay=0).reshape(1, 1, -1)
+                lm_input = self.fusing_module(text_emb, taste_emb_input, torch.tensor([1]), delay=0).reshape(1, 1, -1)
                 hidden_pred, cache = self.slm.forward_one_step(
                     lm_input,
                     masks=torch.tril(torch.ones((1, lm_input.shape[1], lm_input.shape[1]), device=lm_input.device)).to(torch.bool),

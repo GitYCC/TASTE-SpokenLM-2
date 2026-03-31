@@ -7,11 +7,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Configuration
 MODEL_DIR="/mount/models/TASTE2-8B-EN"
-OUTPUT_DIR="./results/stage2/TASTE2_8B_EN"
+OUTPUT_DIR="./results/stage2/TASTE2_8B_EN-quantize_input_latent"
 # for en
 ASR_MODEL="openai/whisper-large-v3"
 # for zh
 # ASR_MODEL="MediaTek-Research/Breeze-ASR-25"
+
+# Set to "true" to quantize taste latent via RVQ then dequantize before feeding back as next input
+QUANTIZE_INPUT_LATENT="true"
+# QUANTIZE_INPUT_LATENT="true"
 
 # Test files
 TEST_FILES=(
@@ -35,12 +39,18 @@ mkdir -p "$OUTPUT_DIR"
 
 # Run batch processing with all files at once
 echo "Starting batch processing..."
+QUANTIZE_FLAG=""
+if [ "$QUANTIZE_INPUT_LATENT" = "true" ]; then
+    QUANTIZE_FLAG="--quantize_input_latent"
+fi
+
 python "$SCRIPT_DIR/generate_audio.py" \
     --model_dir "$MODEL_DIR" \
     --output_dir "$OUTPUT_DIR" \
     --test_files "${TEST_FILES[@]}" \
     --asr_model_dir "$ASR_MODEL" \
-    --stage 2
+    --stage 2 \
+    $QUANTIZE_FLAG
 
 if [ $? -eq 0 ]; then
     echo "✓ Batch processing completed successfully!"

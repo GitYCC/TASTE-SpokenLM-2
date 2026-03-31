@@ -333,21 +333,22 @@ class TASTE2:
         }
 
     @torch.inference_mode()
-    def generation_stage2(self, audio_16k, asr_model_dir=None, text=None, min_len=5, max_len=100):
+    def generation_stage2(self, audio_16k, asr_model_dir=None, text=None, min_len=5, max_len=100, quantize_input_latent=False):
         """Generate stage 2 output"""
         if self.stage != 2:
             raise ValueError("generation_stage2 can only be called on stage 2 model")
-        
+
         # Get ASR text
         asr_text = text if text else self._run_asr(audio_16k, asr_model_dir)
-        
+
         data = self._preprocess(audio_16k, asr_model_dir=asr_model_dir, text=text)
-        
+
         slm_output_generator = self.model.slm.inference(
             **data,
             min_len=min_len,
             max_len=max_len,
             sampling=25,
+            quantize_input_latent=quantize_input_latent,
         )
         
         new_text_tokens, new_taste_embs = list(), list()
@@ -463,7 +464,7 @@ class TASTE2:
             'generated_text': clean_text  # Return clean text without format tokens
         }
 
-def process_single_file(model, audio_file, output_dir, asr_model_dir, stage):
+def process_single_file(model, audio_file, output_dir, asr_model_dir, stage, quantize_input_latent=False):
     """Process a single audio file"""
     print(f"\nProcessing: {os.path.basename(audio_file)}")
     
@@ -502,7 +503,8 @@ def process_single_file(model, audio_file, output_dir, asr_model_dir, stage):
         try:
             result = model.generation_stage2(
                 audio_16k=audio_16k,
-                asr_model_dir=asr_model_dir
+                asr_model_dir=asr_model_dir,
+                quantize_input_latent=quantize_input_latent,
             )
             
             print(f"ASR text: {result['asr_text']}")
@@ -575,9 +577,11 @@ def main():
     parser.add_argument('--output_dir', type=str, required=True, help='Output directory')
     parser.add_argument('--test_files', type=str, nargs='+', required=True, help='Audio/Arrow file paths (multiple files supported)')
     parser.add_argument('--asr_model_dir', type=str, default="openai/whisper-large-v3", help='ASR model')
-    parser.add_argument('--stage', type=str, choices=['1', '2', 'sft'], default='1', 
+    parser.add_argument('--stage', type=str, choices=['1', '2', 'sft'], default='1',
                         help='Which stage to run: 1, 2 or sft (default: 1)')
-    
+    parser.add_argument('--quantize_input_latent', action='store_true', default=False,
+                        help='Quantize taste latent via RVQ then dequantize before feeding back as next input (stage 2 only)')
+
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
     
@@ -613,7 +617,8 @@ def main():
                 continue
                 
             file_results = process_single_file(
-                model, test_file, args.output_dir, args.asr_model_dir, args.stage
+                model, test_file, args.output_dir, args.asr_model_dir, args.stage,
+                quantize_input_latent=args.quantize_input_latent,
             )
             all_results.append(file_results)
             successful_files += 1
