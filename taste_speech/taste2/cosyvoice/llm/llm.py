@@ -358,7 +358,14 @@ class Qwen2Encoder(torch.nn.Module):
 
     def forward_one_step(self, xs, masks, cache=None):
         xs = xs.to(self.torch_dtype)
-        input_masks = masks[:, -1, :]
+        if cache is not None:
+            past_len = cache[0][0].shape[2] if isinstance(cache, (list, tuple)) else cache.get_seq_length()
+            input_masks = torch.ones(
+                (xs.shape[0], past_len + xs.shape[1]),
+                dtype=torch.long, device=xs.device,
+            )
+        else:
+            input_masks = masks[:, -1, :]
         outs = self.model(
             inputs_embeds=xs,
             attention_mask=input_masks,
