@@ -49,7 +49,14 @@ RUN conda activate ${VENV} && \
     pip install -U "setuptools>=70,<71" && \
     pip install -r /workspace/TASTE-SpokenLM-2/docker/cuda124/requirements.txt
 
+# Install TensorRT-LLM (upgrades torch to 2.9+ and pulls CUDA 13 deps)
+RUN conda activate ${VENV} && pip install tensorrt-llm==1.2.0
+
+# TRT-LLM's pip deps (nvidia-cuda-runtime-cu13 etc.) register /usr/local/cuda-13.0
+# as an alternative with higher priority (130 > 124), but cuda-13.0 only ships
+# libraries -- no nvcc or toolkit. Pin the symlink back to 12.4 so FlashInfer
+# and other JIT-compiling packages can find nvcc.
+RUN update-alternatives --set cuda /usr/local/cuda-12.4
+
 RUN conda activate ${VENV} && pip install /workspace/TASTE-SpokenLM-2
 
-# Install Claude Code (run ~/.local/bin/claude to use claude code)
-RUN curl -fsSL https://claude.ai/install.sh | bash

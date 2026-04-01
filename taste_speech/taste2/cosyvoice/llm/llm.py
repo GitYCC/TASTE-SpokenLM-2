@@ -605,6 +605,25 @@ class Qwen2LM(TransformerLM):
                 time.sleep(0.001)
             with self.lock:
                 self.vllm_output_queue.pop(uuid)
+        elif hasattr(self, 'trt_llm'):
+            from tensorrt_llm.sampling_params import SamplingParams as TrtSamplingParams
+            sampling_params = TrtSamplingParams(
+                max_tokens=max_len,
+                min_tokens=min_len,
+                end_id=self.speech_token_size,
+                top_k=sampling,
+            )
+            inputs = {
+                "prompt": "",
+                "multi_modal_embeddings": {
+                    "speech": [lm_input.squeeze(0).to(torch.bfloat16)],
+                },
+            }
+            output = self.trt_llm.generate(inputs, sampling_params=sampling_params)
+            for token_id in output.outputs[0].token_ids:
+                if token_id in self.stop_token_ids:
+                    break
+                yield token_id
         else:
             out_tokens = []
             cache = None

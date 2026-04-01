@@ -40,6 +40,48 @@ class TasteS3GenerationLM(Qwen2LM):
         self.weight_commit_loss = 1.0
         self.is_text_only = (taste_tokenizer is None) or (taste_decoder_mixer is None)
 
+    def load_trt_llm(self, trt_llm_path: str, delete_layers: bool = True):
+        """Load a TRT-LLM engine and attach it as ``self.trt_llm``.
+
+        This mirrors ``TASTE2Model._load_trt_llm`` but operates directly on
+        the ``Qwen2LM`` subclass so ``inference_wrapper`` can dispatch to the
+        engine via the ``hasattr(self, 'trt_llm')`` check.
+
+        Args:
+            trt_llm_path: Path to the exported HF-style checkpoint directory
+                produced by ``export_checkpoint``.
+            delete_layers: If *True*, delete the PyTorch transformer layers
+                to free GPU memory.  Set to *False* when the PyTorch path
+                (e.g. ``inference_bistream``) must remain functional.
+        """
+        import sys
+        import os
+        import threading
+
+        accelerate_dir = os.path.join(
+            os.path.dirname(__file__), 'cosyvoice', 'trt_llm',
+        )
+        if accelerate_dir not in sys.path:
+            sys.path.insert(0, os.path.abspath(accelerate_dir))
+
+        import cosyvoice_trt_llm  # noqa: F401 — registers CosyVoice2ForCausalLM
+        from tensorrt_llm import LLM
+        from tensorrt_llm.llmapi.llm_args import KvCacheConfig
+
+        logging.info("Loading TRT-LLM engine from %s", trt_llm_path)
+        self.trt_llm = LLM(
+            model=trt_llm_path,
+            skip_tokenizer_init=True,
+            kv_cache_config=KvCacheConfig(enable_block_reuse=False),
+        )
+
+        if not hasattr(self, 'lock'):
+            self.lock = threading.Lock()
+
+        if delete_layers:
+            del self.llm.model.model.layers
+            logging.info("Deleted PyTorch transformer layers to free memory")
+
     def forward(
             self,
             batch: dict,
@@ -174,101 +216,200 @@ class TasteS3GenerationLM(Qwen2LM):
         else:
             text_cache = torch.zeros(1, 0, self.llm_input_size, dtype=torch.float32).to(device)
         
-        # 3. Bistream generation following the original mechanism
-        out_tokens = []
-        cache = None
-        next_fill_index = -1
-        
-        for text_token, taste_emb in input_generator:
-            logging.debug(f"[CHECKPOINT:S3-INPUT-RECEIVED] text_token_shape={text_token.shape}")
+        # 3. Bistream generation
+        if hasattr(self, 'trt_llm'):
+            # TRT-LLM path: rebuild full embedding history per segment,
+            # call trt_llm.generate() with fill_token as stop for each segment.
+            from tensorrt_llm.sampling_params import SamplingParams as TrtSamplingParams
 
-            # Get text embedding and mix with taste embedding
-            text_emb = self.llm.forward_embed_tokens(text_token).float()
-            text_len = torch.tensor([text_token.size(1)], device=device)
-            logging.debug(f"[CHECKPOINT:S3-TEXT-EMB-DONE] text_emb_shape={text_emb.shape}")
+            fill_token_id = self.speech_token_size + 2
+            eos_token_id = self.speech_token_size
+            history_emb = torch.zeros(
+                1, 0, self.llm_input_size, dtype=torch.float32,
+            ).to(device)
+            out_tokens = []
 
-            if not self.is_text_only and taste_emb is not None:
-                # Mix text and taste embeddings
-                mixed_emb = self.taste_decoder_mixer(text_emb, taste_emb, text_len)
-                logging.debug(f"[CHECKPOINT:S3-MIXER-DONE] mixed_emb_shape={mixed_emb.shape}")
-            else:
-                mixed_emb = text_emb
+            for text_token, taste_emb in input_generator:
+                logging.debug(f"[TRT-BISTREAM] received text_token shape={text_token.shape}")
 
-            # Append to text cache (these are treated as "text" tokens in bistream)
-            text_cache = torch.concat([text_cache, mixed_emb], dim=1)
-            logging.debug(f"[CHECKPOINT:S3-CACHE-UPDATE] text_cache_size={text_cache.size(1)}")
-            
-            # Generate speech tokens when we have enough "text" tokens
-            if (len(out_tokens) != 0 and out_tokens[-1] == self.speech_token_size + 2) or (len(out_tokens) == 0 and lm_input.size(1) == 1):
-                logging.info('[CHECKPOINT:S3-FILL-TOKEN] get fill token, need to append more text token')
-                if text_cache.size(1) >= self.mix_ratio[0]:
-                    lm_input_text = text_cache[:, :self.mix_ratio[0]]
-                    logging.info('[CHECKPOINT:S3-APPEND-TEXT] append {} text token'.format(lm_input_text.size(1)))
-                    if len(out_tokens) != 0 and out_tokens[-1] == self.speech_token_size + 2:
-                        lm_input = lm_input_text
-                    else:
-                        lm_input = torch.concat([lm_input, lm_input_text], dim=1)
-                    text_cache = text_cache[:, self.mix_ratio[0]:]
+                text_emb = self.llm.forward_embed_tokens(text_token).float()
+                text_len = torch.tensor([text_token.size(1)], device=device)
+
+                if not self.is_text_only and taste_emb is not None:
+                    mixed_emb = self.taste_decoder_mixer(text_emb, taste_emb, text_len)
                 else:
-                    logging.info('[CHECKPOINT:S3-WAIT] not enough text token to decode, wait for more')
+                    mixed_emb = text_emb
+
+                text_cache = torch.cat([text_cache, mixed_emb], dim=1)
+
+                if text_cache.size(1) < self.mix_ratio[0]:
                     continue
-                    
-            # Generate speech tokens
-            logging.debug(f"[CHECKPOINT:S3-GEN-LOOP-START] out_tokens_len={len(out_tokens)}")
+
+                # Consume mix_ratio[0] text embeddings and append to history
+                lm_input_text = text_cache[:, :self.mix_ratio[0]]
+                text_cache = text_cache[:, self.mix_ratio[0]:]
+                history_emb = torch.cat([history_emb, lm_input_text], dim=1)
+
+                full_input = torch.cat([sos_eos_emb, history_emb], dim=1)
+                logging.info(
+                    '[TRT-BISTREAM] segment generate, history_len=%d, total_out=%d',
+                    history_emb.size(1), len(out_tokens),
+                )
+
+                sampling_params = TrtSamplingParams(
+                    max_tokens=self.mix_ratio[1] + 1,
+                    end_id=fill_token_id,
+                    top_k=sampling,
+                )
+                inputs = {
+                    "prompt": "",
+                    "multi_modal_embeddings": {
+                        "speech": [full_input.squeeze(0).to(torch.bfloat16)],
+                    },
+                }
+                output = self.trt_llm.generate(inputs, sampling_params=sampling_params)
+
+                speech_embs = []
+                for token_id in output.outputs[0].token_ids:
+                    if token_id == fill_token_id:
+                        out_tokens.append(token_id)
+                        break
+                    if token_id >= self.speech_token_size:
+                        break
+                    out_tokens.append(token_id)
+                    yield token_id
+                    speech_embs.append(
+                        self.speech_embedding.weight[token_id].reshape(1, 1, -1)
+                    )
+
+                if speech_embs:
+                    history_emb = torch.cat([history_emb] + speech_embs, dim=1)
+                logging.info(
+                    '[TRT-BISTREAM] segment done, generated %d speech tokens',
+                    len(speech_embs),
+                )
+
+            # Final decode: append remaining text + task_id, generate until EOS
+            history_emb = torch.cat([history_emb, text_cache, task_id_emb], dim=1)
+            full_input = torch.cat([sos_eos_emb, history_emb], dim=1)
+            logging.info(
+                '[TRT-BISTREAM] final decode, total_input_len=%d',
+                full_input.size(1),
+            )
+
+            sampling_params = TrtSamplingParams(
+                max_tokens=2000,
+                end_id=eos_token_id,
+                top_k=sampling,
+            )
+            inputs = {
+                "prompt": "",
+                "multi_modal_embeddings": {
+                    "speech": [full_input.squeeze(0).to(torch.bfloat16)],
+                },
+            }
+            output = self.trt_llm.generate(inputs, sampling_params=sampling_params)
+
+            for token_id in output.outputs[0].token_ids:
+                if token_id >= self.speech_token_size:
+                    if token_id == eos_token_id:
+                        logging.info(
+                            '[TRT-BISTREAM] EOS, total_tokens=%d',
+                            len(out_tokens),
+                        )
+                    break
+                out_tokens.append(token_id)
+                yield token_id
+
+        else:
+            # PyTorch forward_one_step path (no TRT-LLM)
+            out_tokens = []
+            cache = None
+            next_fill_index = -1
+
+            for text_token, taste_emb in input_generator:
+                logging.debug(f"[CHECKPOINT:S3-INPUT-RECEIVED] text_token_shape={text_token.shape}")
+
+                text_emb = self.llm.forward_embed_tokens(text_token).float()
+                text_len = torch.tensor([text_token.size(1)], device=device)
+                logging.debug(f"[CHECKPOINT:S3-TEXT-EMB-DONE] text_emb_shape={text_emb.shape}")
+
+                if not self.is_text_only and taste_emb is not None:
+                    mixed_emb = self.taste_decoder_mixer(text_emb, taste_emb, text_len)
+                    logging.debug(f"[CHECKPOINT:S3-MIXER-DONE] mixed_emb_shape={mixed_emb.shape}")
+                else:
+                    mixed_emb = text_emb
+
+                text_cache = torch.concat([text_cache, mixed_emb], dim=1)
+                logging.debug(f"[CHECKPOINT:S3-CACHE-UPDATE] text_cache_size={text_cache.size(1)}")
+
+                if (len(out_tokens) != 0 and out_tokens[-1] == self.speech_token_size + 2) or (len(out_tokens) == 0 and lm_input.size(1) == 1):
+                    logging.info('[CHECKPOINT:S3-FILL-TOKEN] get fill token, need to append more text token')
+                    if text_cache.size(1) >= self.mix_ratio[0]:
+                        lm_input_text = text_cache[:, :self.mix_ratio[0]]
+                        logging.info('[CHECKPOINT:S3-APPEND-TEXT] append {} text token'.format(lm_input_text.size(1)))
+                        if len(out_tokens) != 0 and out_tokens[-1] == self.speech_token_size + 2:
+                            lm_input = lm_input_text
+                        else:
+                            lm_input = torch.concat([lm_input, lm_input_text], dim=1)
+                        text_cache = text_cache[:, self.mix_ratio[0]:]
+                    else:
+                        logging.info('[CHECKPOINT:S3-WAIT] not enough text token to decode, wait for more')
+                        continue
+
+                while True:
+                    seq_len = lm_input.shape[1] if cache is None else lm_input.shape[1] + cache[0][0].size(2)
+
+                    logging.debug(f"[CHECKPOINT:S3-LLM-FORWARD-START] seq_len={seq_len}")
+                    y_pred, cache = self.llm.forward_one_step(lm_input,
+                                                              masks=torch.tril(torch.ones((1, seq_len, seq_len), device=lm_input.device)).to(torch.bool),
+                                                              cache=cache)
+                    logging.debug(f"[CHECKPOINT:S3-LLM-FORWARD-END] y_pred_shape={y_pred.shape}")
+
+                    logp = self.llm_decoder(y_pred[:, -1].float()).log_softmax(dim=-1)
+
+                    if next_fill_index != -1 and len(out_tokens) == next_fill_index:
+                        top_ids = self.speech_token_size + 2
+                        next_fill_index += (self.mix_ratio[1] + 1)
+                    else:
+                        top_ids = self.sampling_ids(logp.squeeze(dim=0), out_tokens, sampling, ignore_eos=True).item()
+
+                    if top_ids == self.speech_token_size + 2:
+                        next_fill_index = len(out_tokens) + self.mix_ratio[1] + 1
+                        logging.info('[CHECKPOINT:S3-FILL-TOKEN-GEN] fill_token index {} next fill_token index {}'.format(len(out_tokens), next_fill_index))
+
+                    out_tokens.append(top_ids)
+                    if top_ids >= self.speech_token_size:
+                        if top_ids == self.speech_token_size + 2:
+                            logging.debug(f"[CHECKPOINT:S3-BREAK] Breaking generation loop")
+                            break
+                        else:
+                            raise ValueError('should not get token {}'.format(top_ids))
+                    logging.debug(f"[CHECKPOINT:S3-YIELD-TOKEN] token_id={top_ids}, total_tokens={len(out_tokens)}")
+                    yield top_ids
+                    lm_input = self.speech_embedding.weight[top_ids].reshape(1, 1, -1)
+
+            # Final decode
+            lm_input = torch.concat([lm_input, text_cache, task_id_emb], dim=1)
+            logging.info('[CHECKPOINT:S3-FINAL-DECODE] no more text token, decode until met eos')
             while True:
                 seq_len = lm_input.shape[1] if cache is None else lm_input.shape[1] + cache[0][0].size(2)
 
-                logging.debug(f"[CHECKPOINT:S3-LLM-FORWARD-START] seq_len={seq_len}")
+                logging.debug(f"[CHECKPOINT:S3-FINAL-LLM-START] seq_len={seq_len}")
                 y_pred, cache = self.llm.forward_one_step(lm_input,
                                                           masks=torch.tril(torch.ones((1, seq_len, seq_len), device=lm_input.device)).to(torch.bool),
                                                           cache=cache)
-                logging.debug(f"[CHECKPOINT:S3-LLM-FORWARD-END] y_pred_shape={y_pred.shape}")
+                logging.debug(f"[CHECKPOINT:S3-FINAL-LLM-END] y_pred_shape={y_pred.shape}")
 
                 logp = self.llm_decoder(y_pred[:, -1].float()).log_softmax(dim=-1)
-
-                if next_fill_index != -1 and len(out_tokens) == next_fill_index:
-                    top_ids = self.speech_token_size + 2
-                    next_fill_index += (self.mix_ratio[1] + 1)
-                else:
-                    top_ids = self.sampling_ids(logp.squeeze(dim=0), out_tokens, sampling, ignore_eos=True).item()
-
-                if top_ids == self.speech_token_size + 2:
-                    next_fill_index = len(out_tokens) + self.mix_ratio[1] + 1
-                    logging.info('[CHECKPOINT:S3-FILL-TOKEN-GEN] fill_token index {} next fill_token index {}'.format(len(out_tokens), next_fill_index))
-
+                top_ids = self.sampling_ids(logp.squeeze(dim=0), out_tokens, sampling, ignore_eos=False).item()
                 out_tokens.append(top_ids)
                 if top_ids >= self.speech_token_size:
-                    if top_ids == self.speech_token_size + 2:
-                        logging.debug(f"[CHECKPOINT:S3-BREAK] Breaking generation loop")
+                    if top_ids == self.speech_token_size:
+                        logging.info(f"[CHECKPOINT:S3-EOS] Reached EOS, total_tokens={len(out_tokens)}")
                         break
                     else:
                         raise ValueError('should not get token {}'.format(top_ids))
-                logging.debug(f"[CHECKPOINT:S3-YIELD-TOKEN] token_id={top_ids}, total_tokens={len(out_tokens)}")
+                logging.debug(f"[CHECKPOINT:S3-FINAL-YIELD] token_id={top_ids}, total_tokens={len(out_tokens)}")
                 yield top_ids
                 lm_input = self.speech_embedding.weight[top_ids].reshape(1, 1, -1)
-
-        # 4. Final decode
-        lm_input = torch.concat([lm_input, text_cache, task_id_emb], dim=1)
-        logging.info('[CHECKPOINT:S3-FINAL-DECODE] no more text token, decode until met eos')
-        while True:
-            seq_len = lm_input.shape[1] if cache is None else lm_input.shape[1] + cache[0][0].size(2)
-
-            logging.debug(f"[CHECKPOINT:S3-FINAL-LLM-START] seq_len={seq_len}")
-            y_pred, cache = self.llm.forward_one_step(lm_input,
-                                                      masks=torch.tril(torch.ones((1, seq_len, seq_len), device=lm_input.device)).to(torch.bool),
-                                                      cache=cache)
-            logging.debug(f"[CHECKPOINT:S3-FINAL-LLM-END] y_pred_shape={y_pred.shape}")
-
-            logp = self.llm_decoder(y_pred[:, -1].float()).log_softmax(dim=-1)
-            top_ids = self.sampling_ids(logp.squeeze(dim=0), out_tokens, sampling, ignore_eos=False).item()
-            out_tokens.append(top_ids)
-            if top_ids >= self.speech_token_size:
-                if top_ids == self.speech_token_size:
-                    logging.info(f"[CHECKPOINT:S3-EOS] Reached EOS, total_tokens={len(out_tokens)}")
-                    break
-                else:
-                    raise ValueError('should not get token {}'.format(top_ids))
-            # in stream mode, yield token one by one
-            logging.debug(f"[CHECKPOINT:S3-FINAL-YIELD] token_id={top_ids}, total_tokens={len(out_tokens)}")
-            yield top_ids
-            lm_input = self.speech_embedding.weight[top_ids].reshape(1, 1, -1)
