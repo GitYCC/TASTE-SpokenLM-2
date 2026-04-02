@@ -69,6 +69,6 @@ RUN conda activate ${VENV} && \
 
 # Remaining taste2 dependencies (versions updated for CUDA 13 / TRT-LLM compat)
 RUN conda activate ${VENV} && \
-    pip install -r /workspace/TASTE-SpokenLM-2/docker/cuda13x/requirements.txt
+    pip install -r /workspace/TASTE-SpokenLM-2/docker/cuda13/requirements.txt
 
 RUN conda activate ${VENV} && pip install /workspace/TASTE-SpokenLM-2
