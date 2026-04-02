@@ -18,7 +18,7 @@ from taste_speech.taste2.cosyvoice.utils.common import fade_in_out
 class TASTE2Model(CosyVoice2Model):
     """Complete TASTE2 Model with full initialization, checkpoint loading, and inference capabilities"""
 
-    def __init__(self, model_dir, stage=1, load_jit=False, load_trt=False, load_vllm=False, fp16=False, trt_concurrent=1):
+    def __init__(self, model_dir, stage=1, load_jit=False, load_trt=False, load_trt_llm=True, load_vllm=False, fp16=False, trt_concurrent=1):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.model_dir = model_dir
         self.fp16 = fp16
@@ -100,7 +100,11 @@ class TASTE2Model(CosyVoice2Model):
 
         # Optional optimizations
         if load_vllm:
+            assert load_trt_llm is False, 'load_trt_llm and load_vllm cannot be True at the same time'
             self._load_vllm(os.path.join(model_dir, 'vllm'))
+        if load_trt_llm:
+            assert load_vllm is False, 'load_trt_llm and load_vllm cannot be True at the same time'
+            self._load_trt_llm(os.path.join(model_dir, 'cosyvoice-trtllm'))
         if load_jit:
             precision = 'fp16' if fp16 else 'fp32'
             self._load_jit(os.path.join(model_dir, f'flow.encoder.{precision}.zip'))
@@ -139,6 +143,39 @@ class TASTE2Model(CosyVoice2Model):
             slm_path = os.path.join(model_dir, 'slm.pt')
             self.slm.load_state_dict(torch.load(slm_path, map_location=self.device), strict=True)
             self.slm.to(self.device).eval()
+
+    def _load_trt_llm(self, trt_llm_path, delete_layers: bool = True):
+        """Load TRT-LLM optimizations for the Stage-3 CosyVoice LLM.
+
+        Attaches a TRT-LLM ``LLM`` engine as ``self.llm.trt_llm`` (mirroring
+        the vLLM pattern) so ``inference_wrapper`` can dispatch to it while
+        keeping the rest of ``TasteS3GenerationLM`` intact.
+
+        Args:
+            trt_llm_path: Path to exported HF-style checkpoint directory.
+            delete_layers: If *True*, delete PyTorch transformer layers to
+                free GPU memory.  Set to *False* when the PyTorch path
+                (e.g. ``inference_bistream``) must remain functional.
+        """
+        import sys, os
+        accelerate_dir = os.path.join(os.path.dirname(__file__), 'cosyvoice', 'trt_llm')
+        if accelerate_dir not in sys.path:
+            sys.path.insert(0, os.path.abspath(accelerate_dir))
+        import cosyvoice_trt_llm  # noqa: F401 — registers CosyVoice2ForCausalLM
+        from tensorrt_llm import LLM
+        from tensorrt_llm.llmapi.llm_args import KvCacheConfig
+        logging.info("Loading TRT-LLM engine from %s", trt_llm_path)
+        trt_llm_engine = LLM(
+            model=trt_llm_path,
+            skip_tokenizer_init=True,
+            kv_cache_config=KvCacheConfig(enable_block_reuse=False),
+        )
+        self.llm.trt_llm = trt_llm_engine
+        if not hasattr(self.llm, 'lock'):
+            self.llm.lock = threading.Lock()
+        if delete_layers:
+            del self.llm.llm.model.model.layers
+            logging.info("Deleted PyTorch transformer layers to free memory")
 
     def _load_vllm(self, vllm_path):
         """Load VLLM optimizations"""

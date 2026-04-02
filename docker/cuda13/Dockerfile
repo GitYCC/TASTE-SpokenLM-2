@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+FROM nvidia/cuda:13.0.0-cudnn-devel-ubuntu22.04
 
 ARG VENV_NAME="taste2"
 ENV VENV=$VENV_NAME
@@ -10,9 +10,17 @@ ENV PYTHONUNBUFFERED=1
 SHELL ["/bin/bash", "--login", "-c"]
 
 RUN apt-get update -y --fix-missing
-RUN apt-get install -y git build-essential curl wget ffmpeg unzip git git-lfs sox libsox-dev tmux nodejs npm protobuf-compiler && \
+# CTranslate2 (used by faster-whisper / ASR) is built against CUDA 12 and
+# dlopen()s libcublas.so.12 at runtime.  Install the CUDA 12 cuBLAS alongside
+# the native CUDA 13 toolkit so both stacks work.
+RUN apt-get install -y git build-essential curl wget ffmpeg unzip git git-lfs sox libsox-dev tmux protobuf-compiler libopenmpi-dev libcublas-12-8 && \
     apt-get clean && \
     git lfs install
+
+# Node.js 20.x (Ubuntu 22.04 ships v12 which lacks optional-chaining syntax)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    apt-get clean
 
 # ==================================================================
 # conda install and conda forge channel as default
@@ -45,18 +53,22 @@ RUN conda activate ${VENV} && conda install -y -c conda-forge pynini==2.1.5
 # Install the project
 COPY . /workspace/TASTE-SpokenLM-2/
 
-RUN conda activate ${VENV} && \
-    pip install -U "setuptools>=70,<71" && \
-    pip install -r /workspace/TASTE-SpokenLM-2/docker/cuda124/requirements.txt
+# setuptools first (TRT-LLM needs >=70)
+RUN conda activate ${VENV} && pip install -U "setuptools>=70,<80"
 
-# Install TensorRT-LLM (upgrades torch to 2.9+ and pulls CUDA 13 deps)
+# TRT-LLM (pulls torch cu128 + transformers + triton + many others)
 RUN conda activate ${VENV} && pip install tensorrt-llm==1.2.0
 
-# TRT-LLM's pip deps (nvidia-cuda-runtime-cu13 etc.) register /usr/local/cuda-13.0
-# as an alternative with higher priority (130 > 124), but cuda-13.0 only ships
-# libraries -- no nvcc or toolkit. Pin the symlink back to 12.4 so FlashInfer
-# and other JIT-compiling packages can find nvcc.
-RUN update-alternatives --set cuda /usr/local/cuda-12.4
+# Force-replace the cu128 torch that TRT-LLM installed with the cu130 build.
+# --force-reinstall --no-deps is required because pip considers 2.9.1 == 2.9.1+cu130
+# and would skip the reinstall otherwise.
+RUN conda activate ${VENV} && \
+    pip install --force-reinstall --no-deps \
+        torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 \
+        --index-url https://download.pytorch.org/whl/cu130
+
+# Remaining taste2 dependencies (versions updated for CUDA 13 / TRT-LLM compat)
+RUN conda activate ${VENV} && \
+    pip install -r /workspace/TASTE-SpokenLM-2/docker/cuda13/requirements.txt
 
 RUN conda activate ${VENV} && pip install /workspace/TASTE-SpokenLM-2
-
