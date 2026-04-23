@@ -146,9 +146,18 @@ def load_audio_data(test_file, output_dir):
 class TASTE2:
     """Unified TASTE2 class for both Stage 1 and Stage 2 audio reconstruction"""
     
-    def __init__(self, model_dir, stage=1, load_jit=False, load_trt=False, load_vllm=False, fp16=False, trt_concurrent=1):
+    def __init__(self, model_dir, stage=1, load_jit=False, load_trt=False, load_trt_llm=False, load_vllm=False, fp16=False, trt_concurrent=1):
         # Simply instantiate the complete TASTE2Model
-        self.model = TASTE2Model(model_dir, stage, load_jit, load_trt, load_vllm, fp16, trt_concurrent)
+        self.model = TASTE2Model(
+            model_dir=model_dir,
+            stage=stage,
+            load_jit=load_jit,
+            load_trt=load_trt,
+            load_trt_llm=load_trt_llm,
+            load_vllm=load_vllm,
+            fp16=fp16,
+            trt_concurrent=trt_concurrent,
+        )
 
         # Expose common references for backward compatibility
         self.device = self.model.device
@@ -348,6 +357,7 @@ class TASTE2:
             min_len=min_len,
             max_len=max_len,
             sampling=25,
+            stop_id=self.model.slm.eos_token_id,
             quantize_input_latent=quantize_input_latent,
         )
         

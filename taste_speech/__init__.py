@@ -53,8 +53,10 @@ def _patch_torchaudio():
             if channels_first:
                 src = src.t()
             data = src.cpu().numpy()
-            subtype = "PCM_16"
-            if bits_per_sample == 24:
+            subtype = None
+            if bits_per_sample == 16:
+                subtype = "PCM_16"
+            elif bits_per_sample == 24:
                 subtype = "PCM_24"
             elif bits_per_sample == 32:
                 subtype = "PCM_32"
