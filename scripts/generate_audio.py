@@ -302,12 +302,15 @@ class TASTE2:
             token_message_ids=torch.tensor(token_message_ids).to(self.device),
         )
 
-    def _postprocess(self, s3_tokens, audio_16k):
+    def _postprocess(self, s3_tokens, audio_16k=None):
         if s3_tokens.shape[1] == 0:
             raise ValueError("No speech tokens generated - cannot synthesize audio. "
                              "The model likely produced no meaningful content tokens.")
         # Convert tokens back to audio
-        speaker_embedding = self.frontend._extract_spk_embedding(audio_16k)
+        if audio_16k is None:
+            speaker_embedding = torch.zeros(1, 192, device=self.device)
+        else:
+            speaker_embedding = self.frontend._extract_spk_embedding(audio_16k)
         audio_chunks = list(self.model.tts(
             source_speech_token=s3_tokens,
             flow_embedding=speaker_embedding
@@ -394,7 +397,7 @@ class TASTE2:
         ))
         s3_tokens = torch.tensor(s3_tokens, dtype=torch.long).unsqueeze(0) if s3_tokens else torch.zeros(1, 0, dtype=torch.long)
 
-        output_audio = self._postprocess(s3_tokens, audio_16k)
+        output_audio = self._postprocess(s3_tokens, audio_16k=None)
         
         # Return results with text info
         return {
