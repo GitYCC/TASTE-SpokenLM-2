@@ -1,6 +1,9 @@
 import os
 import sys
 import argparse
+
+# Allow running from any directory: add script's own directory to sys.path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import threading
 import uuid
 import json
@@ -443,8 +446,37 @@ class TASTE2:
         filtered_tokens, filtered_embs, clean_text = filter_structural_tokens(
             final_text_token, final_taste_token_emb, self.frontend.tokenizer
         )
-        filtered_token_len = torch.tensor([filtered_tokens.shape[1]], dtype=torch.int32).to(self.device)
         print_green('Completion (clean): {}'.format(clean_text))
+
+        # Method B: replace tokens containing punctuation with their stripped versions
+        # (keeps taste embeddings aligned; multi-char BPE tokens like ，在 → 在)
+        punct_chars_set = set('，。！？、；：\u201c\u201d\u2018\u2019（）【】…—～·《》〈〉「」』〔〕')
+        tokens_list = filtered_tokens[0].tolist()
+        new_tokens, new_emb_indices = [], []
+        for i, token_id in enumerate(tokens_list):
+            decoded = self.frontend.tokenizer.decode([token_id])
+            stripped = ''.join(ch for ch in decoded if ch not in punct_chars_set)
+            if stripped == decoded:
+                new_tokens.append(token_id)
+                new_emb_indices.append(i)
+            elif len(stripped) == 0:
+                pass  # pure punct token, drop (Layer 1 should have blocked these already)
+            else:
+                clean_ids = self.frontend.tokenizer.encode(stripped)
+                new_tokens.append(clean_ids[0])
+                new_emb_indices.append(i)
+        orig_count = len(tokens_list)
+        if new_tokens:
+            filtered_tokens = torch.tensor([new_tokens], dtype=filtered_tokens.dtype, device=filtered_tokens.device)
+            filtered_embs = filtered_embs[:, new_emb_indices, :]
+            clean_text_nopunct = self.frontend.tokenizer.decode(new_tokens)
+        else:
+            clean_text_nopunct = ''
+        print_green(f'[Method B] {orig_count} tokens → {len(new_tokens)} tokens '
+                    f'(dropped {orig_count - len(new_tokens)} punct tokens)')
+        print_green(f'Completion (no punct): {clean_text_nopunct}')
+
+        filtered_token_len = torch.tensor([filtered_tokens.shape[1]], dtype=torch.int32).to(self.device)
 
         # Generate audio using only content tokens
         s3_tokens = list(self.taste_stage1.inference(
@@ -461,7 +493,7 @@ class TASTE2:
         return {
             'audio': output_audio,
             'asr_text': asr_text,
-            'generated_text': clean_text  # Return clean text without format tokens
+            'generated_text': clean_text_nopunct.strip()
         }
 
 def process_single_file(model, audio_file, output_dir, asr_model_dir, stage, quantize_input_latent=False):
