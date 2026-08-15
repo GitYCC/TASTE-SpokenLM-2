@@ -4,18 +4,25 @@
 
 This repository contains the training and inference code for the TASTE2 spoken language model. It extends the original TASTE method into an incremental dialogue stack for full-duplex voice interaction — processing live speech input, deciding when to speak or yield the floor, and stopping instantly on user interruption, while preserving the pretrained language model's linguistic ability and acoustic fidelity.
 
-- Project homepage: https://gitycc.github.io/TASTE2-Homepage/
-- VoiceBot system (deployment): https://github.com/GitYCC/TASTE-Voice-Bot
-- Model checkpoints: https://huggingface.co/collections/YC-Chen/taste2
-- Dataset: https://huggingface.co/datasets/wilzzzz/paralinguistic_dialogues
+<p>
+  <a href="https://gitycc.github.io/TASTE2-Homepage/"><img src="https://img.shields.io/badge/Homepage-TASTE2-0A66C2?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Homepage"></a>
+  <a href="https://gitycc.github.io/TASTE2-Homepage/assets/taste2-paper.pdf"><img src="https://img.shields.io/badge/Paper-PDF-B31B1B?style=for-the-badge&logo=adobeacrobatreader&logoColor=white" alt="Paper"></a>
+  <a href="https://github.com/GitYCC/TASTE-Voice-Bot"><img src="https://img.shields.io/badge/VoiceBot-Deployment-181717?style=for-the-badge&logo=github&logoColor=white" alt="VoiceBot Deployment"></a>
+  <a href="https://huggingface.co/collections/YC-Chen/taste2"><img src="https://img.shields.io/badge/Model-Checkpoints-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black" alt="Model Checkpoints"></a>
+  <a href="https://huggingface.co/datasets/wilzzzz/paralinguistic_dialogues"><img src="https://img.shields.io/badge/Dataset-paralinguistic__dialogues-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black" alt="Dataset"></a>
+</p>
 
-## Core Idea
+## Architecture
 
-Each text token is aligned with one continuous audio latent, keeping the text sequence length unchanged while letting acoustic information flow through the entire speech dialogue stack — avoiding interleaving of heterogeneous token streams. The architecture has three main components:
+Each text token is aligned with one continuous audio latent, keeping the text sequence length unchanged while letting acoustic information flow through the entire speech dialogue stack — avoiding interleaving of heterogeneous token streams.
 
-1. **Shared Vocabulary**: a unified text token vocabulary that removes word-level averaging and language-dependent segmentation
-2. **Aligned Prediction**: the language model predicts one audio latent per text token without extending sequence length
-3. **Streaming Synthesis**: an incremental speech detokenizer produces S3 units, synthesized into audio via CosyVoice2
+<p align="center">
+  <img src="https://gitycc.github.io/TASTE2-Homepage/assets/taste2-model.png" alt="TASTE2 architecture with a Speech Tokenizer, Spoken Language Model, and Speech Detokenizer." width="800">
+</p>
+
+1. **Speech Tokenizer (Shared Vocabulary)**: a unified text token vocabulary that removes word-level averaging and language-dependent segmentation
+2. **Spoken Language Model (Aligned Prediction)**: the language model predicts one audio latent per text token without extending sequence length
+3. **Speech Detokenizer (Streaming Synthesis)**: an incremental speech detokenizer produces S3 units, synthesized into audio via CosyVoice2
 
 See the [paper](https://gitycc.github.io/TASTE2-Homepage/assets/taste2-paper.pdf) for full methodology and experiments.
 
